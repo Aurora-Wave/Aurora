@@ -1,0 +1,62 @@
+on:
+  push:
+    tags:
+      - release.**
+
+env:
+  PYTHON_VERSION: "3.9"
+  POETRY_VERSION: "1.8.1"
+  POETRY_URL: https://install.python-poetry.org
+  NUITKA_CACHE_DIR: ~/.nuitka/cache
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        # Do not use the latest versions in order to be backward compatible.
+        # In particular, macos 14+ will build for arm only.
+        os: [macos-12, ubuntu-20.04, windows-2019]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check-out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip' # caching pip dependencies
+
+      # Install using pip / poetry-core backend via PEP 517
+      - run: pip install .
+
+      - uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: main
+          script-name: src/dnb/main.py
+          onefile: true
+          macos-create-app-bundle: true
+          include-package-data: |
+            dnb
+            dash
+            dash_core_components
+            dash_html_components
+            packaging
+            plotly
+          include-package: |
+            plotly
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ runner.os }} Build
+          path: |
+            build/*.exe
+            build/*.bin
+            build/*.app/**/*
