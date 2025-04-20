@@ -21,14 +21,14 @@ Luego de crear el ambiente virtual, se debe activar. En Windows, se puede usar e
 
 Luego, se deben instalar las dependencias necesarias. Para ello, se puede usar el siguiente comando:
 
-```python
+```
 pip install -r requirements.txt
 ```
 
 Finalmente, se instala el paquete para poder convertir el archivo .py a .exe. Para ello, se puede usar el siguiente comando:
 
-```python
-pip install pyinstaller
+```
+pip install .
 ```
 
 en la carpeta 'Aurora'.
@@ -37,7 +37,7 @@ en la carpeta 'Aurora'.
 
 Para ejecutar el programa, se puede usar el siguiente comando:
 
-```python
+```pip
 python src/dnb/main.py
 ```
 
