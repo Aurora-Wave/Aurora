@@ -1,3 +1,12 @@
 /dash/
 
+#Ignore Virtual Environment 
+env/
+.env/
+venv/
+.venv/
+
+
+
+# Build apps
 build
