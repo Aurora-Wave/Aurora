@@ -10,7 +10,7 @@ Python version = 3.9.13 (Obligatorio)
 Luego de clonar el repositorio, se puede optar por crear un ambiente virtual o no. Si se opta por crear un ambiente virtual, se recomienda usar `venv` o `virtualenv`. Para crear un ambiente virtual, se puede usar el siguiente comando:
 
 ```python
-python -m venv env
+py -3.9 -m venv env
 ```
 
 Luego de crear el ambiente virtual, se debe activar. En Windows, se puede usar el siguiente comando:
