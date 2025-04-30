@@ -6,6 +6,10 @@ env/
 venv/
 .venv/
 
+#VScode config
+.vscode/
+
+
 
 
 # Build apps
