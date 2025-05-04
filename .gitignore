@@ -14,3 +14,6 @@ venv/
 
 # Build apps
 build
+
+# Cache
+__pycache__/

@@ -1,3 +1,4 @@
+
 def update_output_with_graph(list_of_contents, list_of_names, list_of_dates):
         if list_of_contents is not None:
             children = []

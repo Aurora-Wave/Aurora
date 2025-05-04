@@ -1,52 +1,59 @@
-from dash import html, dcc, Input, Output
+from dash import Input, Output, State,html
+import dash_bootstrap_components as dbc
 
-def register_layout_callbacks(app):
 
-    # Reacts to tab selection and updates the content container accordingly
+
+def register_upload_button(app):
+    
+    '''Handle the modal layout for file upload.
+    This function is called when the user clicks the "Load" button in the navbar.
+    '''
+
     @app.callback(
-        Output('tab-content', 'children'),
-        Input('menu-tabs', 'value')
+        Output("upload_modal", "is_open"),
+        Input("dropdown_load", "n_clicks"),
+        Input("close_modal", "n_clicks"),
+        State("upload_modal", "is_open"),
+        prevent_initial_call=True,
+
     )
+    def toggle_modal(load_click, close_click, is_open):
+        if load_click or close_click:
+            return not is_open
+        return is_open
 
-    def render_tab_content(tab_value):
-        
-        if tab_value == 'tab-file':
 
-            return html.Div([
-                html.H4("Upload filesssss "),
-                dcc.Upload(
-                    id='upload-data',
-                    children=html.Div([
-                        'Drag and Drop or ',
-                        html.A('Select Files')
-                    ]),
-                    style={
-                        'width': '100%',
-                        'height': '60px',
-                        'lineHeight': '60px',
-                        'borderWidth': '1px',
-                        'borderStyle': 'dashed',
-                        'borderRadius': '5px',
-                        'textAlign': 'center',
-                        'margin': '10px'
-                    },
-                    # Allow multiple files to be uploaded
-                    multiple=True
-                ),
-                html.Div(id='file-list'),
+def register_file_summary_callbacks(app):
+    @app.callback(
+        Output("file_summary", "children"),
+        Input("store_data", "data"),
+        prevent_initial_call=True
+    )
+    def render_file_table(files):
+        if not files:
+            return html.P("No files uploaded.")
 
-            ])
+        table_header = html.Thead(html.Tr([
+            html.Th("File Name"),
+            html.Th("Delete")
+        ]))
 
-        elif tab_value == 'tab-config':
-            return html.Div([
-                html.H4("Processing Config"),
-                html.P("CONFIGURAR PROCESAMIENTO - CARGAR CONFIG")
-            ])
+        table_rows = [
+            html.Tr([
+                html.Td(file["filename"]),
+                html.Td(
+                    dbc.Button("❌",
+                        id={"type": "delete_button", "index": file["filename"]},
+                        color="danger", size="sm", n_clicks=0
+                    )
+                )
+            ]) for file in files
+        ]
 
-        elif tab_value == 'tab-help':
-            return html.Div([
-                html.H4("Help"),
-                html.P("Uso de la app")
-            ])
-
-        return html.Div("Pestaña no reconocida")
+        return dbc.Table(
+            [table_header, html.Tbody(table_rows)],
+            bordered=True,
+            striped=True,
+            hover=True,
+            size="sm"
+        )
