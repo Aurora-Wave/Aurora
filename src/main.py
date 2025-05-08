@@ -1,6 +1,6 @@
 from dash import Dash
 import dash_bootstrap_components as dbc
-from layout_p1 import create_layout
+from layouts.layout_p1 import create_layout
 from callbacks import register_callbacks
 
 # Create Dash app
