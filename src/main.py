@@ -1,10 +1,9 @@
 from dash import Dash
-import dash_bootstrap_components as dbc
 from layouts.layout_p1 import create_layout
 from callbacks import register_callbacks
 
 # Create Dash app
-app = Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = Dash(__name__)
 
 # Set layout
 app.layout = create_layout()
@@ -15,4 +14,4 @@ register_callbacks(app)
 if __name__ == '__main__':
     # Set debug=False to allow Nuitka compilation
     app.run(debug=True, port=8050)
-    #Ctrl +C to stop the server	
+    #Ctrl +C to stop the server

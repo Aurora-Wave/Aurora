@@ -6,6 +6,7 @@ def register_stored_data_callbacks(app):
 
     @app.callback(
         Output("store_data", "data"),
+        Output("upload_status", "children"),
         Input("upload_data", "contents"),
         Input({"type": "delete_button", "index": ALL}, "n_clicks"),
         State("upload_data", "filename"),
@@ -29,7 +30,7 @@ def register_stored_data_callbacks(app):
                         os.remove(f["path"])
                     except Exception as e:
                         print(f"Error deleting file: {e}")
-            return updated
+            return updated, f"Archivo eliminado: {filename_to_remove}"
 
         if contents is None or filenames is None:
             raise exceptions.PreventUpdate
@@ -45,4 +46,4 @@ def register_stored_data_callbacks(app):
                 "path": path
             })
 
-        return current_files + new_files
+        return current_files + new_files, f"{len(new_files)} archivo(s) cargado(s) correctamente."

@@ -1,26 +1,27 @@
-from dash import Input, Output, State,html
+from dash import Input, Output, State, html, ctx
 import dash_bootstrap_components as dbc
 
 
-
 def register_upload_button(app):
-    
     '''Handle the modal layout for file upload.
     This function is called when the user clicks the "Load" button in the navbar.
     '''
 
     @app.callback(
-        Output("upload_modal", "is_open"),
-        Input("dropdown_load", "n_clicks"),
-        Input("close_modal", "n_clicks"),
-        State("upload_modal", "is_open"),
-        prevent_initial_call=True,
-
+        Output("upload_modal", "style"),
+        [Input("nav_load", "n_clicks"),
+         Input("close_modal", "n_clicks")],
+        State("upload_modal", "style"),
+        prevent_initial_call=True
     )
-    def toggle_modal(load_click, close_click, is_open):
-        if load_click or close_click:
-            return not is_open
-        return is_open
+    def toggle_modal(load_click, close_click, current_style):
+        trigger = ctx.triggered_id
+        if trigger == "nav_load":
+            return {"display": "flex", "position": "fixed", "top": 0, "left": 0, "width": "100%", "height": "100%",
+                    "background": "rgba(0,0,0,0.5)", "justifyContent": "center", "alignItems": "center", "zIndex": 1000}
+        elif trigger == "close_modal":
+            return {"display": "none"}
+        return current_style
 
 
 def register_file_summary_callbacks(app):
@@ -42,18 +43,29 @@ def register_file_summary_callbacks(app):
             html.Tr([
                 html.Td(file["filename"]),
                 html.Td(
-                    dbc.Button("❌",
+                    html.Button(
+                        "❌",
                         id={"type": "delete_button", "index": file["filename"]},
-                        color="danger", size="sm", n_clicks=0
+                        n_clicks=0,
+                        style={
+                            "background": "#dc3545",
+                            "color": "white",
+                            "border": "none",
+                            "borderRadius": "4px",
+                            "padding": "2px 8px",
+                            "cursor": "pointer"
+                        }
                     )
                 )
             ]) for file in files
         ]
 
-        return dbc.Table(
+        return html.Table(
             [table_header, html.Tbody(table_rows)],
-            bordered=True,
-            striped=True,
-            hover=True,
-            size="sm"
+            style={
+                "width": "100%",
+                "borderCollapse": "collapse",
+                "marginTop": "10px",
+                "border": "1px solid #dee2e6"
+            }
         )
