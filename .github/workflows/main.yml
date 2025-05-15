@@ -39,7 +39,7 @@ jobs:
       - uses: Nuitka/Nuitka-Action@main
         with:
           nuitka-version: main
-          script-name: src/dnb/main.py
+          script-name: src/launcher.py
           onefile: true
           macos-create-app-bundle: true
           include-package-data: |

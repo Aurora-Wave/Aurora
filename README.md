@@ -39,7 +39,7 @@ en la carpeta 'Aurora'.
 Para ejecutar el programa, se puede usar el siguiente comando:
 
 ```pip
-python src/dnb/main.py
+python src/launcher.py
 ```
 
 Esto abrirá una aplicación.
