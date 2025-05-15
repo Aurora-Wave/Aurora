@@ -16,13 +16,8 @@ def create_layout():
         html.Nav(
             children=[
                 html.Button("Load", id="nav_load", style={"margin": "0 10px"}),
-                html.Button("Save", id="nav_save", style={"margin": "0 10px"}),
                 html.Button("Export", id="nav_export", style={"margin": "0 10px"}),
-                html.Button("Plots", id="nav_plots", style={"margin": "0 10px"}),
-                html.Button("Configuration", id="nav_config", style={"margin": "0 10px"}),
-                html.Button("Help", id="nav_help", style={"margin": "0 10px"}),
-                html.Button("Bugs Report", id="nav_bugs", style={"margin": "0 10px"}),
-                html.Button("Exit", id="nav_exit", style={"margin": "0 10px"}),
+                dcc.Link("Nuevo Gráfico", href="/grafico2", style={"margin": "0 10px", "textDecoration": "none", "color": "#007bff", "background": "none", "border": "none", "padding": "6px 12px", "cursor": "pointer"}),
             ],
             style={
                 "display": "flex",
