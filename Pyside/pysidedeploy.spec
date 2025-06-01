@@ -4,10 +4,10 @@
 title = pyside_app_demo
 
 # project root directory. default = The parent directory of input_file
-project_dir = C:\Users\Jorge C\Desktop\Codes\Pyside
+project_dir = C:\Users\jor_x\Desktop\codes\Aurora\Aurora\Pyside
 
 # source file entry point path. default = main.py
-input_file = C:\Users\Jorge C\Desktop\Codes\Pyside\main.py
+input_file = C:\Users\jor_x\Desktop\codes\Aurora\Aurora\Pyside\main.py
 
 # directory where the executable output is generated
 exec_directory = .
@@ -16,12 +16,12 @@ exec_directory = .
 project_file = 
 
 # application icon
-icon = C:\Users\Jorge C\Desktop\Codes\Pyside\env\Lib\site-packages\PySide6\scripts\deploy_lib\pyside_icon.ico
+icon = C:\Users\jor_x\Desktop\codes\Aurora\Aurora\Pyside\env\Lib\site-packages\PySide6\scripts\deploy_lib\pyside_icon.ico
 
 [python]
 
 # python path
-python_path = C:\Users\Jorge C\Desktop\Codes\Pyside\env\Scripts\python.exe
+python_path = C:\Users\jor_x\Desktop\codes\Aurora\Aurora\Pyside\env\Scripts\python.exe
 
 # python packages to install
 packages = Nuitka==2.6.8
@@ -39,7 +39,7 @@ qml_files =
 excluded_qml_plugins = 
 
 # qt modules used. comma separated
-modules = Core,Widgets
+modules = Widgets,Core
 
 # qt plugins used by the application. only relevant for desktop deployment
 # for qt plugins used in android application see [android][plugins]
