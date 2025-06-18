@@ -1,3 +1,4 @@
+```python
 def load_from_npz(file_path, channel_key):
     npz_data = np.load(file_path, allow_pickle=True)
     arr = npz_data[channel_key]
