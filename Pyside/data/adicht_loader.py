@@ -13,7 +13,7 @@ import scipy.signal
 _df_cache = {}
 
 
-class TraceSignal:
+class Signal:
     """
     Representa una señal individual dentro de un archivo .adicht.
     Atributos principales: nombre, unidades, datos, frecuencia de muestreo, etc.
@@ -46,13 +46,13 @@ class TraceSignal:
         self.TimeShift = 0
 
 
-class Trace:
+class DataRecord:
     """
     Representa el conjunto de señales y metadatos de un archivo .adicht.
     """
 
     def __init__(self):
-        self.Signal = []
+        self.Signals = []
         self.ProFileName = ""
         self.FileName = ""
         self.SignalIndex = 0
@@ -66,15 +66,19 @@ class Trace:
 
 class EMSComment:
     """
-    Representa un comentario EMS asociado a un tiempo específico.
+    Representa un comentario EMS asociado a un tiempo específico, con todos los campos relevantes de LabChart.
     """
 
-    def __init__(self, seconds, comment, number):
-        self.DateTime = ""
-        self.Seconds = seconds
-        self.Comment = comment
-        self.CommentNum = number
-        self.CommentBoxText = f"{comment:<50}{seconds:.2f}"
+    def __init__(self, text, tick_position, channel_, id_, tick_dt, time):
+        self.text = text  # Texto del comentario
+        self.tick_position = tick_position  # Posición del tick (índice)
+        self.channel_ = channel_  # Canal asociado
+        self.id = id_  # ID único o índice
+        self.tick_dt = tick_dt  # Duración de cada tick (s)
+        self.time = time  # Tiempo absoluto en segundos
+
+    def __repr__(self):
+        return f"EMSComment(text={self.text}, tick_position={self.tick_position}, channel_={self.channel_}, id={self.id}, tick_dt={self.tick_dt}, time={self.time})"
 
 
 def detect_r_peaks(ecg_signal, fs):
@@ -96,21 +100,21 @@ def detect_r_peaks(ecg_signal, fs):
 
 def load_labchart_adicht_extended(file_path, gap_length=3):
     """
-    Carga un archivo .adicht y lo parsea a objetos Trace y TraceSignal.
+    Carga un archivo .adicht y lo parsea a objetos DataRecord y Signal.
     Args:
         file_path (str): Ruta del archivo .adicht.
         gap_length (int): Longitud de huecos entre registros (en segundos).
     Returns:
-        Trace: Objeto con todas las señales y metadatos.
+        DataRecord: Objeto con todas las señales y metadatos.
     """
     file_data = adi.read_file(file_path)
-    trace = Trace()
-    trace.ProFileName = file_path.split("\\")[-1]
-    trace.FileName = trace.ProFileName.split(".")[0]
+    data_record = DataRecord()
+    data_record.ProFileName = file_path.split("\\")[-1]
+    data_record.FileName = data_record.ProFileName.split(".")[0]
     total_records = file_data.n_records
     assumed_tsr = None
     for i, channel in enumerate(file_data.channels):
-        signal = TraceSignal()
+        signal = Signal()
         signal.Name = channel.name
         signal.Units = channel.units
         signal.TSRf = channel.fs[0]
@@ -130,27 +134,27 @@ def load_labchart_adicht_extended(file_path, gap_length=3):
         signal.ProData = full_data[signal.TSR : -signal.TSR]
         n_samples = len(signal.ProData)
         signal.TimeSec = np.linspace(1 / signal.TSR, n_samples / signal.TSR, n_samples)
-        trace.Signal.append(signal)
-    for i, sig in enumerate(trace.Signal):
+        data_record.Signals.append(signal)
+    for i, sig in enumerate(data_record.Signals):
         if "ECG" in sig.Name.upper():
-            trace.SignalIndex = i
-            trace.ECGSI = i
+            data_record.SignalIndex = i
+            data_record.ECGSI = i
             break
     else:
-        trace.SignalIndex = 0
-        trace.ECGSI = 0
+        data_record.SignalIndex = 0
+        data_record.ECGSI = 0
 
-    ecg_signal = trace.Signal[trace.ECGSI]
+    ecg_signal = data_record.Signals[data_record.ECGSI]
     ecg_full = np.concatenate([ecg_signal.BB, ecg_signal.ProData, ecg_signal.AB])
     peaks = detect_r_peaks(ecg_full, ecg_signal.TSR)
-    trace.FMxI = peaks
-    trace.Signal[trace.ECGSI].FMxI = peaks
+    data_record.FMxI = peaks
+    data_record.Signals[data_record.ECGSI].FMxI = peaks
     rr_intervals = np.diff(peaks)
     valid_rr = rr_intervals[(peaks[1:] > 200) & (peaks[1:] < len(ecg_full) - 200)]
-    trace.CL = valid_rr
-    trace.CLI = peaks[1 : len(valid_rr) + 1]
-    trace.CLT = trace.CLI / ecg_signal.TSR
-    trace.EBL = ecg_signal.TSR
+    data_record.CL = valid_rr
+    data_record.CLI = peaks[1 : len(valid_rr) + 1]
+    data_record.CLT = data_record.CLI / ecg_signal.TSR
+    data_record.EBL = ecg_signal.TSR
     # Asignar comentarios por señal (canal)
     for ch_idx, ch in enumerate(file_data.channels):
         signal_comments = []
@@ -161,36 +165,47 @@ def load_labchart_adicht_extended(file_path, gap_length=3):
                         c, "tick_dt", 1.0 / ch.fs[rec_idx] if hasattr(ch, "fs") else 1.0
                     )
                     tick_pos = getattr(c, "tick_position", 0)
-                    seconds = (
+                    comment_str = getattr(c, "text", "")
+                    # Nuevo: calcular tiempo absoluto
+                    time = (
                         tick_pos * tick_dt + rec_idx * ch.n_samples[rec_idx] * tick_dt
                     )
-                    comment_str = getattr(c, "str", "")
-                    signal_comments.append(EMSComment(seconds, comment_str, idx + 1))
-        if ch_idx < len(trace.Signal):
-            trace.Signal[ch_idx].MarkerData = signal_comments
-    return trace
+                    # Nuevo: crear EMSComment con todos los campos relevantes
+                    signal_comments.append(
+                        EMSComment(
+                            text=comment_str,
+                            tick_position=tick_pos,
+                            channel_=ch.name,
+                            id_=idx + 1,
+                            tick_dt=tick_dt,
+                            time=time,
+                        )
+                    )
+        if ch_idx < len(data_record.Signals):
+            data_record.Signals[ch_idx].MarkerData = signal_comments
+    return data_record
 
 
-def get_trace_from_path(path, gap_length=3):
+def get_data_record_from_path(path, gap_length=3):
     """
-    Devuelve un objeto Trace (estructura orientada a objetos) a partir de un archivo .adicht.
+    Devuelve un objeto DataRecord (estructura orientada a objetos) a partir de un archivo .adicht.
     Usa caché en memoria para evitar leer el archivo repetidamente.
     """
     global _df_cache
-    cache_key = f"trace::{path}"
+    cache_key = f"datarecord::{path}"
     if cache_key in _df_cache:
         return _df_cache[cache_key]
-    trace = load_labchart_adicht_extended(path, gap_length=gap_length)
-    _df_cache[cache_key] = trace
-    return trace
+    data_record = load_labchart_adicht_extended(path, gap_length=gap_length)
+    _df_cache[cache_key] = data_record
+    return data_record
 
 
 # Ejemplo de uso en una página/callback:
-# from utils.adicht_loader import get_trace_from_path
-# trace = get_trace_from_path(path)
-# ecg_signal = trace.Signal[trace.ECGSI]
+# from data.adicht_loader import get_data_record_from_path
+# data_record = get_data_record_from_path(path)
+# ecg_signal = data_record.Signals[data_record.ECGSI]
 # ecg_full = np.concatenate([ecg_signal.BB, ecg_signal.ProData, ecg_signal.AB])
-# r_peaks = trace.FMxI
+# r_peaks = data_record.FMxI
 # comentarios = ecg_signal.MarkerData
 
-# Si quieres exponer la API orientada a objetos en toda la app, puedes importar get_trace_from_path en las páginas donde lo necesites.
+# Si quieres exponer la API orientada a objetos en toda la app, puedes importar get_data_record_from_path en las páginas donde lo necesites.
