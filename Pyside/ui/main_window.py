@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
         self.time_axes = {}
         self.max_len = 0
         self.chunk_size = 120  # Duración del chunk en segundos
-        self.target_signals = ["HR", "ECG", "FBP", "Valsalva", "CO"]
+        self.target_signals = ["ECG", "FBP",'MCA-L', 'MCA-R', 'Tilt Angle']
 
     def load_data(self):
         """
