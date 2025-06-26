@@ -1,8 +1,8 @@
 """
 viewer_tab.py
 -------------
-Pestaña de visualización general de señales fisiológicas.
-Encapsula la lógica de gráficos, barra de desplazamiento y chunk loading.
+General visualization tab for physiological signals.
+Encapsulates plotting logic, scrollbar, and chunk loading.
 """
 
 import numpy as np
@@ -60,59 +60,34 @@ class ViewerTab(QWidget):
 
     def setup_plots(self, target_signals):
         """
-<<<<<<< Updated upstream
-        Inicializa los gráficos para cada señal objetivo.
-        Args:
-            target_signals (list): Lista de nombres de señales a mostrar.
-=======
         Initialize one plot per signal to visualize.
->>>>>>> Stashed changes
         """
         self.plot_widget.clear()
         self.plots = []
         self._regions = []
-        for i, canal in enumerate(target_signals):
+        for i, signal_name in enumerate(target_signals):
             vb = SelectableViewBox(self.main_window, i)
-            p = self.plot_widget.addPlot(row=i, col=0, title=canal, viewBox=vb)
-            p.setLabel("bottom", "Tiempo (s)")
-            p.setLabel("left", canal)
+            p = self.plot_widget.addPlot(row=i, col=0, title=signal_name, viewBox=vb)
+            p.setLabel("bottom", "Time (s)")
+            p.setLabel("left", signal_name)
             p.setMouseEnabled(x=False, y=False)
             self.plots.append(p)
             self._regions.append(None)
 
-<<<<<<< Updated upstream
-    def load_data(
-        self, file_path, trace, sampling_rates, time_axes, chunk_size, target_signals
-    ):
-=======
     def load_data(self, file_path, signal_group, sampling_rates, time_axes, chunk_size, channel_names):
->>>>>>> Stashed changes
         """
         Configures the viewer tab with given signal group and GUI controls.
 
         Args:
-<<<<<<< Updated upstream
-            file_path (str): Ruta absoluta del archivo de datos.
-            trace (Trace): Objeto con los datos cargados.
-            sampling_rates (dict): Frecuencias de muestreo por canal.
-            time_axes (dict): Ejes de tiempo por canal.
-            chunk_size (int): Duración del chunk en segundos.
-            target_signals (list): Lista de señales a mostrar.
-=======
             file_path (str): Path to the loaded file.
             signal_group (SignalGroup): Signal group containing all channels.
             sampling_rates (dict): Sampling frequency per channel.
             time_axes (dict): Time vector per channel.
             chunk_size (int): Visualization chunk window in seconds.
             channel_names (list[str]): Channels to visualize.
->>>>>>> Stashed changes
         """
         self.signal_group = signal_group
         self.file_path = file_path
-<<<<<<< Updated upstream
-        self.trace = trace
-=======
->>>>>>> Stashed changes
         self.sampling_rates = sampling_rates
         self.time_axes = time_axes
         self.chunk_size = chunk_size
@@ -120,12 +95,8 @@ class ViewerTab(QWidget):
         self.max_len = max([len(self.time_axes[c]) for c in self.target_signals if c in self.time_axes])
 
         self.setup_plots(self.target_signals)
-<<<<<<< Updated upstream
-        # Controles de chunk size y scrollbar
-=======
 
         # Remove previous controls
->>>>>>> Stashed changes
         if self.chunk_size_spinbox:
             self.controls_layout.removeWidget(self.chunk_size_spinbox)
             self.chunk_size_spinbox.deleteLater()
@@ -134,55 +105,35 @@ class ViewerTab(QWidget):
             self.controls_layout.removeWidget(self.scrollbar)
             self.scrollbar.setParent(None)
             self.scrollbar = None
-<<<<<<< Updated upstream
-        # SpinBox para chunk size
-=======
 
         # Add chunk size selector
->>>>>>> Stashed changes
         self.chunk_size_spinbox = QSpinBox()
         self.chunk_size_spinbox.setMinimum(1)
         self.chunk_size_spinbox.setMaximum(3600)
         self.chunk_size_spinbox.setValue(self.chunk_size)
         self.chunk_size_spinbox.setSuffix(" s")
-        self.chunk_size_spinbox.setToolTip("Tamaño del chunk (segundos)")
+        self.chunk_size_spinbox.setToolTip("Chunk size (seconds)")
         self.chunk_size_spinbox.valueChanged.connect(self.on_chunk_size_changed)
-        self.controls_layout.addWidget(QLabel("Chunk:"))
+        self.controls_layout.addWidget(QLabel("Window:"))
         self.controls_layout.addWidget(self.chunk_size_spinbox)
 
         # Add scrollbar for navigation
         self.scrollbar = QScrollBar()
         self.scrollbar.setOrientation(Qt.Horizontal)
         min_fs = min(self.sampling_rates.values())
-        duraciones = [
-            self.time_axes[canal][-1]
-            for canal in self.target_signals
-            if canal in self.sampling_rates and canal in self.time_axes
+        durations = [
+            self.time_axes[signal_name][-1]
+            for signal_name in self.target_signals
+            if signal_name in self.sampling_rates and signal_name in self.time_axes
         ]
-        duracion_minima = int(min(duraciones)) if duraciones else 0
+        min_duration = int(min(durations)) if durations else 0
         self.scrollbar.setMinimum(0)
-<<<<<<< Updated upstream
-        self.scrollbar.setMaximum(
-            duracion_minima - self.chunk_size
-            if duracion_minima > self.chunk_size
-            else 0
-        )
-=======
         self.scrollbar.setMaximum(min_duration - self.chunk_size if min_duration > self.chunk_size else 0)
->>>>>>> Stashed changes
         self.scrollbar.setPageStep(1)
         self.scrollbar.setSingleStep(1)
         self.scrollbar.setValue(0)
         self.scrollbar.valueChanged.connect(self.request_chunk)
         self.controls_layout.addWidget(self.scrollbar)
-<<<<<<< Updated upstream
-        # Chunk loader
-        self.chunk_loader = ChunkLoader(
-            self.file_path, self.target_signals, self.chunk_size
-        )
-        self.chunk_loader.chunk_loaded.connect(self.update_chunk)
-        # Cargar primer chunk
-=======
 
         # Initialize chunk loader
         self.chunk_loader = ChunkLoader(
@@ -194,18 +145,11 @@ class ViewerTab(QWidget):
         self.chunk_loader.chunk_loaded.connect(self.update_chunk)
 
         # Load first window
->>>>>>> Stashed changes
         self.request_chunk(0)
 
     def request_chunk(self, value):
         """
-<<<<<<< Updated upstream
-        Solicita un nuevo chunk de datos al cambiar la posición del scrollbar.
-        Args:
-            value (int): Segundo inicial del chunk a mostrar.
-=======
         Request a chunk of signal to visualize based on scrollbar position.
->>>>>>> Stashed changes
         """
         start = int(value)
         end = start + self.chunk_size
@@ -213,23 +157,6 @@ class ViewerTab(QWidget):
 
     def update_chunk(self, start, end, data_dict):
         """
-<<<<<<< Updated upstream
-        Actualiza los gráficos con los datos del chunk solicitado.
-        Args:
-            start (int): Segundo inicial del chunk.
-            end (int): Segundo final del chunk.
-            data_dict (dict): Diccionario {canal: datos_chunk}
-        """
-        max_points = 5000  # Límite para downsampling manual
-        for i, canal in enumerate(self.target_signals):
-            p = self.plots[i]
-            if not hasattr(p, "curve") or p.curve is None:
-                p.curve = p.plot([], [], pen="y", autoDownsample=True, antialias=False)
-            fs = self.sampling_rates[canal]
-            expected_len = int(self.chunk_size * fs)
-            if canal in data_dict:
-                y = data_dict[canal]
-=======
         Update each signal plot with the requested chunk data.
         """
         max_points = 5000  # Downsampling threshold
@@ -243,7 +170,6 @@ class ViewerTab(QWidget):
 
             if signal_name in data_dict:
                 y = data_dict[signal_name]
->>>>>>> Stashed changes
                 if len(y) < expected_len:
                     y = np.concatenate([y, np.full(expected_len - len(y), np.nan, dtype=np.float32)])
                 t = np.arange(expected_len) / fs + start
@@ -282,26 +208,6 @@ class ViewerTab(QWidget):
         Update chunk loader and scrollbar when chunk duration changes.
         """
         self.chunk_size = value
-<<<<<<< Updated upstream
-        # Actualizar el máximo del scrollbar
-        duraciones = [
-            self.time_axes[canal][-1]
-            for canal in self.target_signals
-            if canal in self.sampling_rates and canal in self.time_axes
-        ]
-        duracion_minima = int(min(duraciones)) if duraciones else 0
-        self.scrollbar.setMaximum(
-            duracion_minima - self.chunk_size
-            if duracion_minima > self.chunk_size
-            else 0
-        )
-        # Actualizar el chunk loader
-        self.chunk_loader = ChunkLoader(
-            self.file_path, self.target_signals, self.chunk_size
-        )
-        self.chunk_loader.chunk_loaded.connect(self.update_chunk)
-        # Recargar el chunk actual
-=======
         durations = [
             self.time_axes[signal_name][-1]
             for signal_name in self.target_signals
@@ -318,5 +224,4 @@ class ViewerTab(QWidget):
             signal_group=self.signal_group,
         )
         self.chunk_loader.chunk_loaded.connect(self.update_chunk)
->>>>>>> Stashed changes
         self.request_chunk(self.scrollbar.value())
