@@ -7,9 +7,32 @@ Python version = 3.11
 ## Estructura del proyecto
 
 - `main.py`: Punto de entrada de la aplicación.
-- `ui/`: Componentes de la interfaz gráfica (ventanas, pestañas, widgets personalizados).
+
+- `core/`: Signal, SignalGroup, and related logic
+  - `signal.py`: File loading, conversion, and orchestration
+  - `signal_group.py`: Aditch file loader
+  
+- `data/`: File loading, conversion, and orchestration
+  - `data_manager.py`: File loading, conversion, and orchestration
+  - `aditch_loader.py`: Aditch file loader
+  - `csv_loader.py`: csv file loader
+  - `EDF_loader.py`: EDF file loader
+  
 - `processing/`: Módulos de procesamiento y análisis de datos.
-- `data/`: Carga y manejo de archivos de datos.
+   - `chunk_loader.py`: c
+   - `ecg_analyzer.py`: ecg functionality
+  
+- `ui/`: Componentes de la interfaz gráfica (ventanas, pestañas, widgets personalizados).
+  - `widgets/`: Widget folder
+  - `ecg_tab.py`
+  - `main_window.py`
+  
+
+  
+
+  
+
+  
 - `requirements.txt`: Dependencias del proyecto.
 
 ## Instalación

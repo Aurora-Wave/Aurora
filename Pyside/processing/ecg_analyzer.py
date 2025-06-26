@@ -1,47 +1,59 @@
 """
 ecg_analyzer.py
 ---------------
-Utilidades para análisis de señales ECG: detección de RR peaks y transformada wavelet.
+Utilities for ECG signal analysis: R-peak detection and wavelet transforms.
 """
 
 import numpy as np
 from scipy.signal import find_peaks
+import pywt
 
 class ECGAnalyzer:
     """
-    Clase utilitaria para análisis de señales ECG.
-    Provee métodos para detección de RR peaks y transformada wavelet.
+    Utility class for analyzing ECG signals.
+    Provides static methods for RR peak detection and wavelet-based transformation.
     """
     @staticmethod
-    def detect_rr_peaks(ecg_signal, fs, distance_sec=0.3, height=None):
+    def detect_rr_peaks(ecg_signal: np.ndarray, fs: float, distance_sec: float = 0.4, wavelet: str = "haar", level: int = 5) -> np.ndarray:
         """
-        Detecta los picos R (RR peaks) en una señal ECG.
+        Detects R-peaks in an ECG signal using wavelet transform and adaptive thresholding.
+
         Args:
-            ecg_signal (np.ndarray): Señal ECG cruda.
-            fs (float): Frecuencia de muestreo en Hz.
-            distance_sec (float): Distancia mínima entre picos en segundos (default 0.3s).
-            height (float|None): Altura mínima del pico (opcional).
+            ecg_signal (np.ndarray): Raw ECG signal array.
+            fs (float): Sampling frequency in Hz.
+            distance_sec (float): Minimum distance between peaks in seconds (default 0.4s).
+            wavelet (str): Wavelet type (default 'haar').
+            level (int): Decomposition level for wavelet transform (default 5).
+
         Returns:
-            np.ndarray: Índices de los picos detectados.
+            np.ndarray: Indices of detected R-peaks.
         """
-        distance = int(distance_sec * fs)
-        peaks, _ = find_peaks(ecg_signal, distance=distance, height=height)
-        return peaks
+        coeffs = pywt.wavedec(ecg_signal, wavelet, level=level)
+        D5 = coeffs[1]
+        upsample_factor = int(np.ceil(len(ecg_signal) / len(D5)))
+        D5 = np.repeat(D5, upsample_factor)[:len(ecg_signal)]
+
+        D5_sq = D5 ** 2
+        threshold = np.percentile(D5_sq, 95)
+        cleaned = np.where(D5_sq >= threshold, D5_sq, 0)
+
+        r_peaks, _ = find_peaks(cleaned, distance=int(distance_sec * fs))
+        return r_peaks
 
     @staticmethod
-    def wavelet_transform(ecg_signal, wavelet='db4', level=4):
+    def wavelet_transform(ecg_signal: np.ndarray, wavelet: str = 'db4', level: int = 4):
         """
-        Aplica la transformada wavelet discreta a la señal ECG.
+        Applies discrete wavelet transform to an ECG signal and reconstructs the detail components.
+
         Args:
-            ecg_signal (np.ndarray): Señal ECG cruda.
-            wavelet (str): Nombre del wavelet a usar (default 'db4').
-            level (int): Nivel de descomposición (default 4).
+            ecg_signal (np.ndarray): Raw ECG signal.
+            wavelet (str): Name of the wavelet to use (default 'db4').
+            level (int): Decomposition level (default 4).
+
         Returns:
-            tuple: (reconstrucción usando solo los detalles, lista de coeficientes wavelet)
+            tuple: (Reconstructed signal from detail coefficients, list of all wavelet coefficients)
         """
-        import pywt
         coeffs = pywt.wavedec(ecg_signal, wavelet, level=level)
-        # Reconstruir la señal a partir de los detalles (ajustable según visualización deseada)
         details = [np.zeros_like(c) if i == 0 else c for i, c in enumerate(coeffs)]
         reconstructed = pywt.waverec(details, wavelet)
         return reconstructed, coeffs

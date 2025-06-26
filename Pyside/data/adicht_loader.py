@@ -1,24 +1,32 @@
 """
 adicht_loader.py
 ----------------
-Carga y parseo de archivos .adicht (LabChart) a objetos de señales fisiológicas.
-Incluye clases de datos y utilidades para manejo de señales y comentarios.
+Loader for .adicht files using adi.read_file.
+Parses LabChart signals and comments into Signal and SignalGroup objects.
 """
 
 import numpy as np
 import adi
-import scipy.signal
 
-# --- CACHE GLOBAL EN MEMORIA (solo para la sesión actual del proceso) ---
-_df_cache = {}
+from core.signal import Signal, SignalGroup
+from core.comments import EMSComment
+from processing.ecg_analyzer import ECGAnalyzer
 
+# Global cache to avoid redundant loading
+_adicht_cache = {}
 
+<<<<<<< Updated upstream
 class TraceSignal:
     """
     Representa una señal individual dentro de un archivo .adicht.
     Atributos principales: nombre, unidades, datos, frecuencia de muestreo, etc.
+=======
+def load_adicht(path, preload=True, gap_length=3):
+>>>>>>> Stashed changes
     """
+    Load a .adicht LabChart file and return a SignalGroup object.
 
+<<<<<<< Updated upstream
     def __init__(self):
         self.Name = ""
         self.Animal = "Human"
@@ -80,19 +88,14 @@ class EMSComment:
 def detect_r_peaks(ecg_signal, fs):
     """
     Detecta picos R en una señal ECG usando umbral absoluto.
+=======
+>>>>>>> Stashed changes
     Args:
-        ecg_signal (np.ndarray): Señal ECG cruda.
-        fs (float): Frecuencia de muestreo.
-    Returns:
-        np.ndarray: Índices de los picos detectados.
-    """
-    ecg_abs = np.abs(ecg_signal - np.mean(ecg_signal))
-    threshold = np.percentile(ecg_abs, 95)
-    peaks, _ = scipy.signal.find_peaks(
-        ecg_abs, height=threshold, distance=int(0.25 * fs)
-    )
-    return peaks
+        path (str): Path to the .adicht file.
+        preload (bool): Unused.
+        gap_length (int): Seconds of zero-padding between records.
 
+<<<<<<< Updated upstream
 
 def load_labchart_adicht_extended(file_path, gap_length=3):
     """
@@ -117,14 +120,36 @@ def load_labchart_adicht_extended(file_path, gap_length=3):
         signal.TSR = int(round(signal.TSRf))
         signal.EU = signal.Units
         assumed_tsr = assumed_tsr or signal.TSR
+=======
+    Returns:
+        SignalGroup: Group of Signal objects with metadata and comments.
+    """
+    global _adicht_cache
+    if path in _adicht_cache:
+        return _adicht_cache[path]
+
+    file_data = adi.read_file(path)
+    signals = []
+    total_records = file_data.n_records
+    ecg_signal = None
+
+    for channel in file_data.channels:
+        name = channel.name
+        units = channel.units
+        fs = channel.fs[0]
+        fs_int = int(round(fs))
+
+        # Concatenate records with gap
+>>>>>>> Stashed changes
         full_data = []
         for record_id in range(1, total_records + 1):
             data = channel.get_data(record_id)
             if data is not None:
                 full_data.append(data)
                 if record_id < total_records:
-                    full_data.append(np.zeros(gap_length * signal.TSR))
+                    full_data.append(np.zeros(gap_length * fs_int))
         full_data = np.concatenate(full_data)
+<<<<<<< Updated upstream
         signal.BB = full_data[: signal.TSR]
         signal.AB = full_data[-signal.TSR :]
         signal.ProData = full_data[signal.TSR : -signal.TSR]
@@ -155,12 +180,28 @@ def load_labchart_adicht_extended(file_path, gap_length=3):
     for ch_idx, ch in enumerate(file_data.channels):
         signal_comments = []
         for rec_idx, rec in enumerate(ch.records):
+=======
+
+        # Split into BB, ProData, AB
+        bb = full_data[:fs_int]
+        ab = full_data[-fs_int:]
+        pro_data = full_data[fs_int:-fs_int]
+        time = np.linspace(1 / fs, len(pro_data) / fs, len(pro_data))
+
+        # Create Signal object
+        sig = Signal(name=name, data=pro_data, time=time, units=units, fs=fs)
+        sig.BB = bb
+        sig.AB = ab
+
+        # Load EMS comments
+        comments = []
+        for rec_idx, rec in enumerate(channel.records):
+>>>>>>> Stashed changes
             if hasattr(rec, "comments") and rec.comments:
                 for idx, c in enumerate(rec.comments):
-                    tick_dt = getattr(
-                        c, "tick_dt", 1.0 / ch.fs[rec_idx] if hasattr(ch, "fs") else 1.0
-                    )
+                    tick_dt = getattr(c, "tick_dt", 1.0 / channel.fs[rec_idx])
                     tick_pos = getattr(c, "tick_position", 0)
+<<<<<<< Updated upstream
                     seconds = (
                         tick_pos * tick_dt + rec_idx * ch.n_samples[rec_idx] * tick_dt
                     )
@@ -169,8 +210,32 @@ def load_labchart_adicht_extended(file_path, gap_length=3):
         if ch_idx < len(trace.Signal):
             trace.Signal[ch_idx].MarkerData = signal_comments
     return trace
+=======
+                    text = getattr(c, "text", "")
+                    time_sec = tick_pos * tick_dt + rec_idx * channel.n_samples[rec_idx] * tick_dt
+                    comments.append(EMSComment(
+                        text=text,
+                        tick_position=tick_pos,
+                        channel=name,
+                        comment_id=idx + 1,
+                        tick_dt=tick_dt,
+                        time_sec=time_sec,
+                        user_defined=False
+                    ))
+        sig.MarkerData = comments
+>>>>>>> Stashed changes
 
+        # If it's an ECG, process R-peaks
+        if "ECG" in name.upper():
+            ecg_full = np.concatenate([bb, pro_data, ab])
+            peaks = ECGAnalyzer.detect_rr_peaks(ecg_full, fs_int)
+            sig.FMxI = peaks
+            sig.CL = np.diff(peaks)
+            sig.CLI = peaks[1 : len(sig.CL) + 1]
+            sig.CLT = sig.CLI / fs
+            ecg_signal = sig  # Save for HR_GEN
 
+<<<<<<< Updated upstream
 def get_trace_from_path(path, gap_length=3):
     """
     Devuelve un objeto Trace (estructura orientada a objetos) a partir de un archivo .adicht.
@@ -183,8 +248,28 @@ def get_trace_from_path(path, gap_length=3):
     trace = load_labchart_adicht_extended(path, gap_length=gap_length)
     _df_cache[cache_key] = trace
     return trace
+=======
+        signals.append(sig)
+>>>>>>> Stashed changes
 
+    # Create HR_GEN if ECG present
+    if ecg_signal and ecg_signal.FMxI is not None and len(ecg_signal.FMxI) >= 3:
+        peaks = ecg_signal.FMxI
+        hr_data = []
+        hr_time = []
+        for i in range(1, len(peaks) - 1):
+            idx_start = peaks[i]
+            idx_end = peaks[i + 1]
+            t_start = idx_start / ecg_signal.fs
+            t_end = idx_end / ecg_signal.fs
+            rr = t_end - t_start
+            hr = 60 / rr if rr > 0 else 0
+            hr_data.extend([hr, hr])
+            hr_time.extend([t_start, t_end])
+        hr_signal = Signal(name="HR_GEN", data=hr_data, time=hr_time, units="bpm", fs=1.0)
+        signals.append(hr_signal)
 
+<<<<<<< Updated upstream
 # Ejemplo de uso en una página/callback:
 # from utils.adicht_loader import get_trace_from_path
 # trace = get_trace_from_path(path)
@@ -194,3 +279,8 @@ def get_trace_from_path(path, gap_length=3):
 # comentarios = ecg_signal.MarkerData
 
 # Si quieres exponer la API orientada a objetos en toda la app, puedes importar get_trace_from_path en las páginas donde lo necesites.
+=======
+    signal_group = SignalGroup(signals)
+    _adicht_cache[path] = signal_group
+    return signal_group
+>>>>>>> Stashed changes
