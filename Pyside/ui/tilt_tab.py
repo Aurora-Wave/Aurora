@@ -1,11 +1,24 @@
 import numpy as np
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
-    QTableWidgetItem, QScrollBar, QHeaderView, QLineEdit, QMessageBox, QAbstractItemView
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QScrollBar,
+    QHeaderView,
+    QLineEdit,
+    QMessageBox,
+    QAbstractItemView,
+    QSpinBox,
 )
 from PySide6.QtCore import Qt
 import pyqtgraph as pg
 from core.comments import EMSComment
+from core.interval_extractor import extract_event_intervals
+from processing.chunk_loader import ChunkLoader
 
 
 class TiltTab(QWidget):
@@ -20,8 +33,11 @@ class TiltTab(QWidget):
         self.file_path = None
         self.channel_names = []
         self.comments = []
+        self.intervals = []
         self._comment_lines = []
         self.target_channels = ["HR_GEN", "ECG", "FBP", "Valsalva"]
+        self._selected_interval_idx = None  # Nuevo: índice de intervalo seleccionado
+        self._scrollbar_value = 0  # Nuevo: valor actual de la barra
 
         # Table of comments
         self.table = QTableWidget()
@@ -31,7 +47,7 @@ class TiltTab(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSortingEnabled(True)
-        self.table.cellClicked.connect(self._on_comment_selected)
+        self.table.cellClicked.connect(self._on_interval_selected)  # Cambiado
 
         # Controls
         self.filter_box = QLineEdit()
@@ -44,10 +60,23 @@ class TiltTab(QWidget):
         self.add_button = QPushButton("Add Comment")
         self.add_button.clicked.connect(self._add_comment)
 
+        self.chunk_size = 120  # segundos por defecto
+        self.scrollbar = QScrollBar()
+        self.scrollbar.setOrientation(Qt.Horizontal)
+        self.scrollbar.valueChanged.connect(self._on_scrollbar_changed)
+        self.chunk_size_spinbox = QSpinBox()
+        self.chunk_size_spinbox.setMinimum(10)
+        self.chunk_size_spinbox.setMaximum(3600)
+        self.chunk_size_spinbox.setValue(self.chunk_size)
+        self.chunk_size_spinbox.setSuffix(" s")
+        self.chunk_size_spinbox.valueChanged.connect(self._on_chunk_size_changed)
         controls_layout = QHBoxLayout()
-        controls_layout.addWidget(self.filter_box)
+        controls_layout.addWidget(self.filter_box, stretch=1)
         controls_layout.addWidget(self.delete_button)
         controls_layout.addWidget(self.add_button)
+        controls_layout.addWidget(QLabel("Ventana:"))
+        controls_layout.addWidget(self.chunk_size_spinbox)
+        controls_layout.addWidget(self.scrollbar, stretch=3)
 
         # Plots for selected channels
         self.plot_widget = pg.GraphicsLayoutWidget()
@@ -59,27 +88,72 @@ class TiltTab(QWidget):
         layout.addWidget(self.plot_widget, 3)
         self.setLayout(layout)
 
+        self._chunk_loader = None
+        self._chunk_loader_connected = False  # Nuevo: para evitar múltiples conexiones
+
     def update_tilt_tab(self, signal_group, channel_names, file_path):
         self.signal_group = signal_group
         self.channel_names = channel_names
         self.file_path = file_path
-        self._load_comments()
-        self._update_comment_table()
+        # Filtrar canales válidos y únicos para target_channels
+        self.target_channels = []
+        for name in ["HR_GEN", "ECG", "FBP", "Valsalva"]:
+            sig = self.signal_group.get(name)
+            if sig and name not in self.target_channels:
+                self.target_channels.append(name)
+        self._load_intervals()
+        self._update_interval_table()
+        self._setup_scrollbar()
+        self._selected_interval_idx = None
+        self._last_scrollbar_value = 0
+        self._disconnect_chunk_loader()
+        self._chunk_loader = ChunkLoader(
+            file_path=self.file_path,
+            channel_names=self.target_channels,
+            chunk_size=self.chunk_size,
+            signal_group=self.signal_group,
+        )
+        self._chunk_loader.chunk_loaded.connect(self._on_chunk_loaded)
 
-    def _load_comments(self):
-        self.comments = []
-        for name in self.channel_names:
-            signal = self.signal_group.get(name)
-            if signal and signal.MarkerData:
-                self.comments.extend(signal.MarkerData)
+    def _disconnect_chunk_loader(self):
+        if self._chunk_loader is not None:
+            try:
+                self._chunk_loader.chunk_loaded.disconnect()
+            except Exception:
+                pass
 
-    def _update_comment_table(self):
-        filtered = self._apply_filter()
-        self.table.setRowCount(len(filtered))
-        for row, comment in enumerate(filtered):
-            self.table.setItem(row, 0, QTableWidgetItem(str(comment.comment_id)))
-            self.table.setItem(row, 1, QTableWidgetItem(comment.text))
-            self.table.setItem(row, 2, QTableWidgetItem(f"{comment.time:.2f}"))
+    def _load_intervals(self):
+        # Obtener todas las señales
+        signals = [
+            self.signal_group.get(name)
+            for name in self.channel_names
+            if self.signal_group.get(name)
+        ]
+        self.intervals = extract_event_intervals(signals)
+
+    def _update_interval_table(self):
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(
+            ["Tipo", "Evento", "Inicio (s)", "Evento (s)", "Fin (s)"]
+        )
+        self.table.setRowCount(len(self.intervals))
+        for row, interval in enumerate(self.intervals):
+            tipo = interval.get("tipo", "")
+            evento = interval.get("evento", "")
+            t_ini = interval.get("t_baseline") or interval.get("t_evento")
+            t_evt = interval.get("t_evento")
+            t_fin = interval.get("t_recovery") or interval.get("t_tilt_down")
+            self.table.setItem(row, 0, QTableWidgetItem(str(tipo)))
+            self.table.setItem(row, 1, QTableWidgetItem(str(evento)))
+            self.table.setItem(
+                row, 2, QTableWidgetItem(f"{t_ini:.2f}" if t_ini is not None else "")
+            )
+            self.table.setItem(
+                row, 3, QTableWidgetItem(f"{t_evt:.2f}" if t_evt is not None else "")
+            )
+            self.table.setItem(
+                row, 4, QTableWidgetItem(f"{t_fin:.2f}" if t_fin is not None else "")
+            )
 
     def _filter_comments(self):
         self._update_comment_table()
@@ -88,43 +162,91 @@ class TiltTab(QWidget):
         query = self.filter_box.text().lower()
         return [c for c in self.comments if query in c.text.lower()]
 
-    def _on_comment_selected(self, row, col):
-        filtered = self._apply_filter()
-        if row >= len(filtered):
-            return
-        comment = filtered[row]
+    def _setup_scrollbar(self):
+        # Determinar duración máxima entre todos los canales
+        max_dur = 0
+        for name in self.target_channels:
+            sig = self.signal_group.get(name)
+            if sig:
+                dur = len(sig.get_full_signal()) / sig.fs
+                if dur > max_dur:
+                    max_dur = dur
+        self.scrollbar.setMinimum(0)
+        self.scrollbar.setMaximum(
+            int(max_dur) - self.chunk_size if max_dur > self.chunk_size else 0
+        )
+        self.scrollbar.setPageStep(1)
+        self.scrollbar.setSingleStep(1)
+        self.scrollbar.setValue(0)
 
-        # Clear plots and lines
+    def _on_chunk_size_changed(self, value):
+        self.chunk_size = value
+        self._setup_scrollbar()
+        self._last_scrollbar_value = self.scrollbar.value()
+        self._update_plot()
+
+    def _on_scrollbar_changed(self, value):
+        self._last_scrollbar_value = value
+        self._update_plot()
+
+    def _on_interval_selected(self, row, col):
+        self._selected_interval_idx = row
+        self.scrollbar.setValue(0)
+        self._last_scrollbar_value = 0
+        self._update_plot()
+
+    def _update_plot(self):
+        row = self._selected_interval_idx
+        if row is None or row >= len(self.intervals):
+            return
+        interval = self.intervals[row]
+        t_ini = interval.get("t_baseline") or interval.get("t_evento")
+        t_evt = interval.get("t_evento")
+        t_fin = interval.get("t_recovery") or interval.get("t_tilt_down")
+        evento = interval.get("evento", "")
+        start = self._last_scrollbar_value
+        end = start + self.chunk_size
+        if t_ini is not None and t_fin is not None and t_fin - t_ini < self.chunk_size:
+            start = max(0, t_ini - (self.chunk_size - (t_fin - t_ini)) / 2)
+            end = start + self.chunk_size
         self.plot_widget.clear()
         self._comment_lines.clear()
         self.plot_items.clear()
+        # Solicitar chunk
+        if self._chunk_loader is not None:
+            self._chunk_loader.request_chunk(start, end)
 
-        # Window of 10 seconds around comment
-        window = 10
-        start = max(0, comment.time - window / 2)
-        end = start + window
-
-        # Create plots for selected channels
+    def _on_chunk_loaded(self, start_sec, end_sec, data_dict):
+        row = self._selected_interval_idx
+        if row is None or row >= len(self.intervals):
+            return
+        interval = self.intervals[row]
+        t_evt = interval.get("t_evento")
+        evento = interval.get("evento", "")
         for idx, channel in enumerate(self.target_channels):
             signal = self.signal_group.get(channel)
             if signal is None:
                 continue
-
             fs = signal.fs
-            full = signal.get_full_signal()
-            t = np.linspace(0, len(full) / fs, len(full))
-            mask = (t >= start) & (t <= end)
-
+            t = np.arange(int((end_sec - start_sec) * fs)) / fs + start_sec
+            y = data_dict.get(channel, np.full_like(t, np.nan))
             p = self.plot_widget.addPlot(row=idx, col=0, title=channel)
             p.setLabel("bottom", "Time (s)")
             p.setLabel("left", channel)
             p.showGrid(x=True, y=True)
-            curve = p.plot(t[mask], full[mask], pen="y")
-            p.setXRange(start, end, padding=0)
-
-            vline = pg.InfiniteLine(pos=comment.time, angle=90, pen=pg.mkPen("r", width=2))
-            p.addItem(vline)
-            self._comment_lines.append(vline)
+            curve = p.plot(t, y, pen="y")
+            p.setXRange(start_sec, end_sec, padding=0)
+            # Línea vertical en el evento con etiqueta
+            if t_evt is not None and start_sec <= t_evt <= end_sec:
+                vline = pg.InfiniteLine(
+                    pos=t_evt, angle=90, pen=pg.mkPen("r", width=2)
+                )
+                p.addItem(vline)
+                label = pg.TextItem(evento, color="r", anchor=(0, 1))
+                label.setPos(t_evt, p.viewRange()[1][1])
+                p.addItem(label)
+                self._comment_lines.append(vline)
+                self._comment_lines.append(label)
             self.plot_items[channel] = (p, curve)
 
     def _delete_selected_comment(self):
