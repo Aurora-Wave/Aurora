@@ -15,6 +15,7 @@ from processing.ecg_analyzer import ECGAnalyzer
 # Global cache to avoid redundant loading
 _adicht_cache = {}
 
+
 def load_adicht(path, preload=True, gap_length=3):
     """
     Load a .adicht LabChart file and return a SignalGroup object.
@@ -71,16 +72,21 @@ def load_adicht(path, preload=True, gap_length=3):
                     tick_dt = getattr(c, "tick_dt", 1.0 / channel.fs[rec_idx])
                     tick_pos = getattr(c, "tick_position", 0)
                     text = getattr(c, "text", "")
-                    time_sec = tick_pos * tick_dt + rec_idx * channel.n_samples[rec_idx] * tick_dt
-                    comments.append(EMSComment(
-                        text=text,
-                        tick_position=tick_pos,
-                        channel=name,
-                        comment_id=idx + 1,
-                        tick_dt=tick_dt,
-                        time_sec=time_sec,
-                        user_defined=False
-                    ))
+                    time_sec = (
+                        tick_pos * tick_dt
+                        + rec_idx * channel.n_samples[rec_idx] * tick_dt
+                    )
+                    comments.append(
+                        EMSComment(
+                            text=text,
+                            tick_position=tick_pos,
+                            channel=name,
+                            comment_id=idx + 1,
+                            tick_dt=tick_dt,
+                            time_sec=time_sec,
+                            user_defined=False,
+                        )
+                    )
         sig.MarkerData = comments
 
         # If it's an ECG, process R-peaks
@@ -109,8 +115,16 @@ def load_adicht(path, preload=True, gap_length=3):
             hr = 60 / rr if rr > 0 else 0
             hr_data.extend([hr, hr])
             hr_time.extend([t_start, t_end])
-        hr_signal = Signal(name="HR_GEN", data=hr_data, time=hr_time, units="bpm", fs=1.0)
-        signals.append(hr_signal)
+        hr_signal = Signal(name="HR", data=hr_data, time=hr_time, units="bpm", fs=1.0)
+        # Reemplaza HR existente si hay, si no, agrega
+        replaced = False
+        for i, s in enumerate(signals):
+            if s.name.upper() == "HR":
+                signals[i] = hr_signal
+                replaced = True
+                break
+        if not replaced:
+            signals.append(hr_signal)
 
     signal_group = SignalGroup(signals)
     _adicht_cache[path] = signal_group

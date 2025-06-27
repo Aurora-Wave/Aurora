@@ -6,7 +6,13 @@ General signal analysis tab. Allows signal selection, chunk scrolling, and editi
 
 import numpy as np
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QSpinBox, QPushButton
+    QWidget,
+    QVBoxLayout,
+    QLabel,
+    QHBoxLayout,
+    QComboBox,
+    QSpinBox,
+    QPushButton,
 )
 from PySide6.QtCore import Qt
 import pyqtgraph as pg
@@ -60,10 +66,16 @@ class AnalysisTab(QWidget):
         self.next_button = QPushButton("Next ⏭")
         self.next_button.clicked.connect(self._go_to_next_chunk)
 
-        for widget in [self.label, self.signal_selector,
-                       self.chunk_label, self.chunk_size_box,
-                       self.start_label, self.start_time_box,
-                       self.prev_button, self.next_button]:
+        for widget in [
+            self.label,
+            self.signal_selector,
+            self.chunk_label,
+            self.chunk_size_box,
+            self.start_label,
+            self.start_time_box,
+            self.prev_button,
+            self.next_button,
+        ]:
             self.controls_layout.addWidget(widget)
 
         # --- Plot area ---
@@ -155,7 +167,7 @@ class AnalysisTab(QWidget):
             return
 
         channels = [self.selected_signal_name]
-        if self.selected_signal_name == "HR_GEN" and self.signal_group.get("ECG"):
+        if self.selected_signal_name == "HR" and self.signal_group.get("ECG"):
             channels.append("ECG")
 
         self.chunk_loader = ChunkLoader(
@@ -197,18 +209,25 @@ class AnalysisTab(QWidget):
                 x_peaks = t[valid_peaks]
                 y_peaks = y[valid_peaks]
                 self.plot_items[1].plot(
-                    x_peaks, y_peaks, pen=None, symbol='o', symbolBrush='r', symbolSize=10
+                    x_peaks,
+                    y_peaks,
+                    pen=None,
+                    symbol="o",
+                    symbolBrush="r",
+                    symbolSize=10,
                 )
 
-            # Plot 3: HR_GEN if available
-            hr = self.signal_group.get("HR_GEN")
+            # Plot 3: HR if available
+            hr = self.signal_group.get("HR")
             if hr:
                 hr_t = hr.time
                 hr_y = hr.data
                 mask = (hr_t >= start) & (hr_t <= end)
-                self.curves[2] = self.plot_items[2].plot(hr_t[mask], hr_y[mask], pen="m")
+                self.curves[2] = self.plot_items[2].plot(
+                    hr_t[mask], hr_y[mask], pen="m"
+                )
 
-        elif name == "HR_GEN":
+        elif name == "HR":
             # Plot 1: ECG + peaks
             ecg = self.signal_group.get("ECG")
             if ecg:
@@ -221,14 +240,21 @@ class AnalysisTab(QWidget):
                 peaks = ecg.FMxI if hasattr(ecg, "FMxI") else None
                 if peaks is not None and len(peaks) > 0:
                     rel_peaks = (peaks - int(start * ecg.fs)).astype(int)
-                    valid_peaks = rel_peaks[(rel_peaks >= 0) & (rel_peaks < len(ecg_seg))]
+                    valid_peaks = rel_peaks[
+                        (rel_peaks >= 0) & (rel_peaks < len(ecg_seg))
+                    ]
                     x_peaks = time_seg[valid_peaks]
                     y_peaks = ecg_seg[valid_peaks]
                     self.plot_items[0].plot(
-                        x_peaks, y_peaks, pen=None, symbol='o', symbolBrush='r', symbolSize=10
+                        x_peaks,
+                        y_peaks,
+                        pen=None,
+                        symbol="o",
+                        symbolBrush="r",
+                        symbolSize=10,
                     )
 
-            # Plot 2: HR_GEN itself
+            # Plot 2: HR itself
             hr = signal
             hr_t = hr.time
             hr_y = hr.data

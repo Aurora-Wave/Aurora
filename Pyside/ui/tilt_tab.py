@@ -7,24 +7,21 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QScrollBar,
     QHeaderView,
     QLineEdit,
     QMessageBox,
     QAbstractItemView,
-    QSpinBox,
 )
 from PySide6.QtCore import Qt
 import pyqtgraph as pg
 from core.comments import EMSComment
 from core.interval_extractor import extract_event_intervals
-from processing.chunk_loader import ChunkLoader
 
 
 class TiltTab(QWidget):
     """
     Tab to visualize and manage comments (EMSComment) in a signal.
-    Shows a table of comments and navigates to corresponding regions on selection.
+    Shows a table of intervals and plots the full signals for selected channels.
     """
 
     def __init__(self):
@@ -34,20 +31,22 @@ class TiltTab(QWidget):
         self.channel_names = []
         self.comments = []
         self.intervals = []
-        self._comment_lines = []
-        self.target_channels = ["HR_GEN", "ECG", "FBP", "Valsalva"]
-        self._selected_interval_idx = None  # Nuevo: índice de intervalo seleccionado
-        self._scrollbar_value = 0  # Nuevo: valor actual de la barra
+        self.target_channels = ["HR", "ECG", "FBP", "Valsalva"]
+        self._selected_interval_idx = None
 
-        # Table of comments
+        # Table of intervals
         self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["ID", "Text", "Time (s)"])
+        self.table.setColumnCount(
+            5
+        )  # Cambiará a 5 -> 5 columnas: Evento, Inicio, Evento(s), Fin, Duración
+        self.table.setHorizontalHeaderLabels(
+            ["Evento", "Inicio (s)", "Evento (s)", "Fin (s)", "Duración (s)"]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSortingEnabled(True)
-        self.table.cellClicked.connect(self._on_interval_selected)  # Cambiado
+        self.table.cellClicked.connect(self._on_interval_selected)
 
         # Controls
         self.filter_box = QLineEdit()
@@ -60,23 +59,10 @@ class TiltTab(QWidget):
         self.add_button = QPushButton("Add Comment")
         self.add_button.clicked.connect(self._add_comment)
 
-        self.chunk_size = 120  # segundos por defecto
-        self.scrollbar = QScrollBar()
-        self.scrollbar.setOrientation(Qt.Horizontal)
-        self.scrollbar.valueChanged.connect(self._on_scrollbar_changed)
-        self.chunk_size_spinbox = QSpinBox()
-        self.chunk_size_spinbox.setMinimum(10)
-        self.chunk_size_spinbox.setMaximum(3600)
-        self.chunk_size_spinbox.setValue(self.chunk_size)
-        self.chunk_size_spinbox.setSuffix(" s")
-        self.chunk_size_spinbox.valueChanged.connect(self._on_chunk_size_changed)
         controls_layout = QHBoxLayout()
         controls_layout.addWidget(self.filter_box, stretch=1)
         controls_layout.addWidget(self.delete_button)
         controls_layout.addWidget(self.add_button)
-        controls_layout.addWidget(QLabel("Ventana:"))
-        controls_layout.addWidget(self.chunk_size_spinbox)
-        controls_layout.addWidget(self.scrollbar, stretch=3)
 
         # Plots for selected channels
         self.plot_widget = pg.GraphicsLayoutWidget()
@@ -88,8 +74,13 @@ class TiltTab(QWidget):
         layout.addWidget(self.plot_widget, 3)
         self.setLayout(layout)
 
-        self._chunk_loader = None
-        self._chunk_loader_connected = False  # Nuevo: para evitar múltiples conexiones
+        # Estado del gráfico
+        self._start_from_event = False
+        self.toggle_start_button = QPushButton("Start from event")
+        self.toggle_start_button.setCheckable(True)
+        self.toggle_start_button.setChecked(False)
+        self.toggle_start_button.clicked.connect(self._toggle_start_mode)
+        controls_layout.addWidget(self.toggle_start_button)
 
     def update_tilt_tab(self, signal_group, channel_names, file_path):
         self.signal_group = signal_group
@@ -97,33 +88,16 @@ class TiltTab(QWidget):
         self.file_path = file_path
         # Filtrar canales válidos y únicos para target_channels
         self.target_channels = []
-        for name in ["HR_GEN", "ECG", "FBP", "Valsalva"]:
+        for name in ["HR", "ECG", "FBP", "Valsalva"]:
             sig = self.signal_group.get(name)
             if sig and name not in self.target_channels:
                 self.target_channels.append(name)
         self._load_intervals()
         self._update_interval_table()
-        self._setup_scrollbar()
         self._selected_interval_idx = None
-        self._last_scrollbar_value = 0
-        self._disconnect_chunk_loader()
-        self._chunk_loader = ChunkLoader(
-            file_path=self.file_path,
-            channel_names=self.target_channels,
-            chunk_size=self.chunk_size,
-            signal_group=self.signal_group,
-        )
-        self._chunk_loader.chunk_loaded.connect(self._on_chunk_loaded)
-
-    def _disconnect_chunk_loader(self):
-        if self._chunk_loader is not None:
-            try:
-                self._chunk_loader.chunk_loaded.disconnect()
-            except Exception:
-                pass
+        self._update_plot_full()
 
     def _load_intervals(self):
-        # Obtener todas las señales
         signals = [
             self.signal_group.get(name)
             for name in self.channel_names
@@ -134,119 +108,103 @@ class TiltTab(QWidget):
     def _update_interval_table(self):
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
-            ["Tipo", "Evento", "Inicio (s)", "Evento (s)", "Fin (s)"]
+            ["Evento", "Inicio (s)", "Evento (s)", "Fin (s)", "Duración (s)"]
         )
         self.table.setRowCount(len(self.intervals))
         for row, interval in enumerate(self.intervals):
-            tipo = interval.get("tipo", "")
             evento = interval.get("evento", "")
             t_ini = interval.get("t_baseline") or interval.get("t_evento")
             t_evt = interval.get("t_evento")
             t_fin = interval.get("t_recovery") or interval.get("t_tilt_down")
-            self.table.setItem(row, 0, QTableWidgetItem(str(tipo)))
-            self.table.setItem(row, 1, QTableWidgetItem(str(evento)))
+            duracion = (
+                (t_fin - t_ini) if (t_ini is not None and t_fin is not None) else None
+            )
+            self.table.setItem(row, 0, QTableWidgetItem(str(evento)))
             self.table.setItem(
-                row, 2, QTableWidgetItem(f"{t_ini:.2f}" if t_ini is not None else "")
+                row, 1, QTableWidgetItem(f"{t_ini:.2f}" if t_ini is not None else "")
             )
             self.table.setItem(
-                row, 3, QTableWidgetItem(f"{t_evt:.2f}" if t_evt is not None else "")
+                row, 2, QTableWidgetItem(f"{t_evt:.2f}" if t_evt is not None else "")
             )
             self.table.setItem(
-                row, 4, QTableWidgetItem(f"{t_fin:.2f}" if t_fin is not None else "")
+                row, 3, QTableWidgetItem(f"{t_fin:.2f}" if t_fin is not None else "")
+            )
+            self.table.setItem(
+                row,
+                4,
+                QTableWidgetItem(f"{duracion:.2f}" if duracion is not None else ""),
             )
 
     def _filter_comments(self):
         self._update_comment_table()
 
-    def _apply_filter(self):
-        query = self.filter_box.text().lower()
-        return [c for c in self.comments if query in c.text.lower()]
-
-    def _setup_scrollbar(self):
-        # Determinar duración máxima entre todos los canales
-        max_dur = 0
-        for name in self.target_channels:
-            sig = self.signal_group.get(name)
-            if sig:
-                dur = len(sig.get_full_signal()) / sig.fs
-                if dur > max_dur:
-                    max_dur = dur
-        self.scrollbar.setMinimum(0)
-        self.scrollbar.setMaximum(
-            int(max_dur) - self.chunk_size if max_dur > self.chunk_size else 0
-        )
-        self.scrollbar.setPageStep(1)
-        self.scrollbar.setSingleStep(1)
-        self.scrollbar.setValue(0)
-
-    def _on_chunk_size_changed(self, value):
-        self.chunk_size = value
-        self._setup_scrollbar()
-        self._last_scrollbar_value = self.scrollbar.value()
-        self._update_plot()
-
-    def _on_scrollbar_changed(self, value):
-        self._last_scrollbar_value = value
-        self._update_plot()
-
     def _on_interval_selected(self, row, col):
         self._selected_interval_idx = row
-        self.scrollbar.setValue(0)
-        self._last_scrollbar_value = 0
-        self._update_plot()
+        self._update_plot_full()
 
-    def _update_plot(self):
-        row = self._selected_interval_idx
-        if row is None or row >= len(self.intervals):
-            return
-        interval = self.intervals[row]
-        t_ini = interval.get("t_baseline") or interval.get("t_evento")
-        t_evt = interval.get("t_evento")
-        t_fin = interval.get("t_recovery") or interval.get("t_tilt_down")
-        evento = interval.get("evento", "")
-        start = self._last_scrollbar_value
-        end = start + self.chunk_size
-        if t_ini is not None and t_fin is not None and t_fin - t_ini < self.chunk_size:
-            start = max(0, t_ini - (self.chunk_size - (t_fin - t_ini)) / 2)
-            end = start + self.chunk_size
+    def _toggle_start_mode(self):
+        self._start_from_event = self.toggle_start_button.isChecked()
+        if self._start_from_event:
+            self.toggle_start_button.setText("Start from baseline")
+        else:
+            self.toggle_start_button.setText("Start from event")
+        self._update_plot_full()
+
+    def _update_plot_full(self):
         self.plot_widget.clear()
-        self._comment_lines.clear()
         self.plot_items.clear()
-        # Solicitar chunk
-        if self._chunk_loader is not None:
-            self._chunk_loader.request_chunk(start, end)
-
-    def _on_chunk_loaded(self, start_sec, end_sec, data_dict):
-        row = self._selected_interval_idx
-        if row is None or row >= len(self.intervals):
-            return
-        interval = self.intervals[row]
-        t_evt = interval.get("t_evento")
-        evento = interval.get("evento", "")
+        # Determinar el intervalo seleccionado
+        t_ini, t_evt, t_fin = None, None, None
+        if (
+            self._selected_interval_idx is not None
+            and 0 <= self._selected_interval_idx < len(self.intervals)
+        ):
+            interval = self.intervals[self._selected_interval_idx]
+            t_ini = interval.get("t_baseline") or interval.get("t_evento")
+            t_evt = interval.get("t_evento")
+            t_fin = interval.get("t_recovery") or interval.get("t_tilt_down")
         for idx, channel in enumerate(self.target_channels):
             signal = self.signal_group.get(channel)
             if signal is None:
                 continue
+            y_full = signal.get_full_signal()
             fs = signal.fs
-            t = np.arange(int((end_sec - start_sec) * fs)) / fs + start_sec
-            y = data_dict.get(channel, np.full_like(t, np.nan))
+            t_full = np.arange(len(y_full)) / fs
+            # Recorte según el intervalo seleccionado y modo
+            if t_ini is not None and t_fin is not None:
+                if self._start_from_event and t_evt is not None:
+                    start_time = t_evt
+                else:
+                    start_time = t_ini
+                idx_ini = int(np.round(start_time * fs))
+                idx_fin = int(np.round(t_fin * fs))
+                idx_ini = max(0, min(idx_ini, len(y_full) - 1))
+                idx_fin = max(idx_ini + 1, min(idx_fin, len(y_full)))
+                t = t_full[idx_ini:idx_fin]
+                y = y_full[idx_ini:idx_fin]
+            else:
+                t = t_full
+                y = y_full
             p = self.plot_widget.addPlot(row=idx, col=0, title=channel)
             p.setLabel("bottom", "Time (s)")
             p.setLabel("left", channel)
             p.showGrid(x=True, y=True)
             curve = p.plot(t, y, pen="y")
-            p.setXRange(start_sec, end_sec, padding=0)
-            # Línea vertical en el evento con etiqueta
-            if t_evt is not None and start_sec <= t_evt <= end_sec:
-                vline = pg.InfiniteLine(
-                    pos=t_evt, angle=90, pen=pg.mkPen("r", width=2)
-                )
-                p.addItem(vline)
-                label = pg.TextItem(evento, color="r", anchor=(0, 1))
-                label.setPos(t_evt, p.viewRange()[1][1])
-                p.addItem(label)
-                self._comment_lines.append(vline)
-                self._comment_lines.append(label)
+            p.setXRange(t[0], t[-1], padding=0)
+            # Si hay un evento dentro del rango, marcarlo
+            if (
+                self._selected_interval_idx is not None
+                and 0 <= self._selected_interval_idx < len(self.intervals)
+            ):
+                evento = interval.get("evento", "")
+                if t_evt is not None and t[0] <= t_evt <= t[-1]:
+                    vline = pg.InfiniteLine(
+                        pos=t_evt, angle=90, pen=pg.mkPen("r", width=2)
+                    )
+                    p.addItem(vline)
+                    label = pg.TextItem(evento, color="r", anchor=(0, 1))
+                    label.setPos(t_evt, p.viewRange()[1][1])
+                    p.addItem(label)
             self.plot_items[channel] = (p, curve)
 
     def _delete_selected_comment(self):
