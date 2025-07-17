@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QMessageBox,
 )
+from ui.widgets.export_selection_dialog import ExportSelectionDialog
+from core.interval_extractor import extract_event_intervals
 import numpy as np
 from ui.viewer_tab import ViewerTab
 from ui.analysis_tab import AnalysisTab
@@ -79,9 +81,30 @@ class MainWindow(QMainWindow):
 
     def export_csv(self):
         """
-        Exporta un CSV con una sola fila: cada columna es la media por minuto y el máximo por minuto de cada señal.
+        Exporta un CSV permitiendo seleccionar señales y tests (eventos) a exportar.
         """
         if self.signal_group is None:
+            return
+
+        # Obtener señales y tests disponibles
+        available_signals = self.signal_group.list_names()
+        intervals = extract_event_intervals(list(self.signal_group.signals.values()))
+        available_tests = [interval["evento"] for interval in intervals if interval.get("evento")]
+        # Eliminar duplicados manteniendo orden
+        seen = set()
+        unique_tests = []
+        for t in available_tests:
+            if t not in seen:
+                unique_tests.append(t)
+                seen.add(t)
+
+        # Mostrar diálogo de selección
+        dialog = ExportSelectionDialog(available_signals, unique_tests, self)
+        if not dialog.exec():
+            return
+        selected_signals, selected_tests = dialog.get_selections()
+        if not selected_signals:
+            QMessageBox.warning(self, "Export", "No signals selected.")
             return
 
         # Selección de archivo destino
@@ -90,26 +113,43 @@ class MainWindow(QMainWindow):
         )
         if not file_path:
             return
-        # Procesar señales
-        row = []
-        headers = []
-        for name in self.target_signals:
-            signal = self.signal_group.get(name)
-            if signal is None:
-                headers.extend([f"{name}_mean", f"{name}_max"])
-                row.extend(["", ""])
-                continue
-            data = signal.get_full_signal()
-            fs = signal.fs
-            if len(data) == 0 or fs <= 0:
-                headers.extend([f"{name}_mean", f"{name}_max"])
-                row.extend(["", ""])
-                continue
-            n_minutes = int(np.ceil(len(data) / (fs * 60)))
-            for minute in range(n_minutes):
-                start = int(minute * fs * 60)
-                end = int(min((minute + 1) * fs * 60, len(data)))
-                segment = data[start:end]
+
+        # Si no hay tests seleccionados, exportar todo el rango
+        export_intervals = []
+        if selected_tests:
+            for interval in intervals:
+                if interval.get("evento") in selected_tests:
+                    # Usar t_evento y t_recovery si existen
+                    t_start = interval.get("t_evento")
+                    t_end = interval.get("t_recovery")
+                    if t_start is not None and t_end is not None:
+                        export_intervals.append((interval["evento"], t_start, t_end))
+        else:
+            # Un solo intervalo: todo el rango
+            export_intervals.append(("Full", 0, None))
+
+        # Procesar señales por cada test/intervalo
+        all_headers = []
+        all_rows = []
+        for test_name, t_start, t_end in export_intervals:
+            row = []
+            headers = []
+            for name in selected_signals:
+                signal = self.signal_group.get(name)
+                if signal is None:
+                    headers.extend([f"{name}_mean_{test_name}", f"{name}_max_{test_name}"])
+                    row.extend(["", ""])
+                    continue
+                data = signal.get_full_signal()
+                fs = signal.fs
+                if len(data) == 0 or fs <= 0:
+                    headers.extend([f"{name}_mean_{test_name}", f"{name}_max_{test_name}"])
+                    row.extend(["", ""])
+                    continue
+                # Recortar al intervalo
+                idx_start = int(t_start * fs) if t_start is not None else 0
+                idx_end = int(t_end * fs) if t_end is not None else len(data)
+                segment = data[idx_start:idx_end]
                 if len(segment) == 0:
                     mean = ""
                     maxv = ""
@@ -124,19 +164,21 @@ class MainWindow(QMainWindow):
                         if np.isscalar(np.max(segment))
                         else float(np.max(segment).item())
                     )
-                    # Formatear con punto decimal
                     mean = f"{mean_val:.6f}"
                     maxv = f"{maxv_val:.6f}"
-                headers.append(f"{name}_mean_min{minute+1}")
-                headers.append(f"{name}_max_min{minute+1}")
+                headers.append(f"{name}_mean_{test_name}")
+                headers.append(f"{name}_max_{test_name}")
                 row.append(mean)
                 row.append(maxv)
+            all_headers = headers  # Todas las filas tienen los mismos headers
+            all_rows.append(row)
         # Escribir CSV
         try:
             with open(file_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f, delimiter=";")
-                writer.writerow(headers)
-                writer.writerow(row)
+                writer.writerow(all_headers)
+                for row in all_rows:
+                    writer.writerow(row)
             QMessageBox.information(self, "Export", f"Exported CSV to {file_path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", str(e))
@@ -173,11 +215,11 @@ class MainWindow(QMainWindow):
         # Load data in viewer
         self.viewer_tab.load_data(
             file_path=file_path,
-            signal_group=self.signal_group,
+            data_record=self.signal_group,
             sampling_rates=self.sampling_rates,
             time_axes=self.time_axes,
             chunk_size=self.chunk_size,
-            channel_names=self.target_signals,
+            target_signals=self.target_signals,
         )
 
         # Load data in analysis tab
@@ -196,11 +238,11 @@ class MainWindow(QMainWindow):
         # Refresca las vistas que dependan de HR
         self.viewer_tab.load_data(
             file_path=None,
-            signal_group=self.signal_group,
+            data_record=self.signal_group,
             sampling_rates=self.sampling_rates,
             time_axes=self.time_axes,
             chunk_size=self.chunk_size,
-            channel_names=self.target_signals,
+            target_signals=self.target_signals,
         )
         self.analysis_tab.update_analysis_tab(
             self.signal_group, self.target_signals, None

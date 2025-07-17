@@ -52,10 +52,13 @@ class ChunkLoader(QObject):
             signal = self.signal_group.get(name)
             if signal is not None:
                 fs = signal.fs
-                full_data = signal.get_full_signal()
+                # Usar solo el array principal de datos, sin buffers BB/AB
+                data = signal.data if hasattr(signal, 'data') else signal.get_full_signal()
                 start_idx = int(start_sec * fs)
                 end_idx = int(end_sec * fs)
-                chunk = full_data[start_idx:end_idx]
+                start_idx = max(0, min(start_idx, len(data)-1))
+                end_idx = max(start_idx+1, min(end_idx, len(data)))
+                chunk = data[start_idx:end_idx]
                 result[name] = chunk.astype(np.float32)
 
         self.chunk_loaded.emit(start_sec, end_sec, result)
