@@ -1,10 +1,3 @@
-"""
-viewer_tab.py
--------------
-General visualization tab for physiological signals.
-Encapsulates plotting logic, scrollbar, and chunk loading.
-"""
-
 import numpy as np
 from PySide6.QtWidgets import (
     QWidget,
@@ -13,6 +6,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QSpinBox,
+    QScrollArea,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt
 import pyqtgraph as pg
@@ -22,69 +17,68 @@ from processing.chunk_loader import ChunkLoader
 
 class ViewerTab(QWidget):
     """
-    Pestaña de visualización general de señales fisiológicas.
-    Permite navegar por las señales cargadas usando chunk loading y barra de desplazamiento.
-    Sincroniza la selección de regiones entre gráficos.
+    Tab for general physiological signal visualization.
+    Allows chunk navigation and interaction.
     """
 
     def __init__(self, main_window):
-        """
-        Args:
-            main_window (QMainWindow): Referencia a la ventana principal para acceso a datos globales.
-        """
         super().__init__()
         self.main_window = main_window
-        self.plot_widget = pg.GraphicsLayoutWidget()
         self.plots = []
-        self._regions = []
         self.scrollbar = None
         self.chunk_size_spinbox = None
+
+        # Scroll area to allow vertical scrolling of many plots
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_content = QWidget()
+        self.scroll_layout = QVBoxLayout(self.scroll_content)
+        self.scroll_layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_layout.setSpacing(5)
+        self.scroll_area.setWidget(self.scroll_content)
+
+        # Control bar (chunk size + scrollbar)
         self.controls_layout = QHBoxLayout()
         self.controls_layout.setContentsMargins(0, 0, 0, 0)
-        self.controls_layout.setSpacing(5)
-        self.plot_area_layout = QVBoxLayout()
-        self.plot_area_layout.setContentsMargins(0, 0, 0, 0)
-        self.plot_area_layout.setSpacing(0)
-        self.plot_area_layout.addLayout(self.controls_layout)
-        self.plot_area_layout.addWidget(self.plot_widget)
-        self.setLayout(self.plot_area_layout)
+        self.controls_layout.setSpacing(10)
+
+        # Main layout
+        main_layout = QVBoxLayout()
+        main_layout.addLayout(self.controls_layout)
+        main_layout.addWidget(self.scroll_area)
+        self.setLayout(main_layout)
+        self._regions = []  # Needed for synchronized region selection
 
     def setup_plots(self, target_signals):
-        """
-        Inicializa los gráficos para cada señal objetivo.
-        Args:
-            target_signals (list): List of signal names to display.
-        """
-        self.plot_widget.clear()
+        """Initialize plot widgets for the selected signals."""
+        self.clear_plots()
         self.plots = []
-        self._regions = []
-        for i, signal_name in enumerate(target_signals):
-            vb = SelectableViewBox(self.main_window, i)
-            p = self.plot_widget.addPlot(row=i, col=0, title=signal_name, viewBox=vb)
-            p.setLabel("bottom", "Time (s)")
-            p.setLabel("left", signal_name)
-            p.setMouseEnabled(x=False, y=False)
-            self.plots.append(p)
-            self._regions.append(None)
 
-    def load_data(
-        self,
-        file_path,
-        data_record,
-        sampling_rates,
-        time_axes,
-        chunk_size,
-        target_signals,
-    ):
+        for i, signal_name in enumerate(target_signals):
+            vb = SelectableViewBox(self, i)
+            plot = pg.PlotWidget(viewBox=vb)
+            plot.setMinimumHeight(200)
+            plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            plot.setLabel("bottom", "Time (s)")
+            plot.setLabel("left", signal_name)
+            plot.setMouseEnabled(x=False, y=False)
+            curve = plot.plot([], [], pen="y")
+            plot.curve = curve
+            self.scroll_layout.addWidget(plot)
+            self.plots.append(plot)
+            self._regions.append(None)  # Track region per plot
+
+    def clear_plots(self):
+        """Remove all existing plots from layout."""
+        while self.scroll_layout.count():
+            item = self.scroll_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+
+    def load_data(self, file_path, data_record, sampling_rates, time_axes, chunk_size, target_signals):
         """
-        Configura los gráficos, barra de desplazamiento y chunk loader para la pestaña de visualización general.
-        Args:
-            file_path (str): Absolute path to the data file.
-            data_record (Trace): Loaded data object.
-            sampling_rates (dict): Sampling rates per channel.
-            time_axes (dict): Time axes per channel.
-            chunk_size (int): Chunk duration in seconds.
-            target_signals (list): List of signals to display.
+        Set up plots, scrollbar and chunk loader for the viewer tab.
         """
         self.file_path = file_path
         self.data_record = data_record
@@ -92,20 +86,31 @@ class ViewerTab(QWidget):
         self.time_axes = time_axes
         self.chunk_size = chunk_size
         self.target_signals = target_signals
-        self.max_len = max(
-            [len(self.time_axes[c]) for c in self.target_signals if c in self.time_axes]
-        )
+
+        # Precompute global Y ranges
+        self.y_ranges = {}
+        for signal_name in self.target_signals:
+            signal = self.data_record[signal_name]
+            y_valid = signal.data[~np.isnan(signal.data)]
+            if len(y_valid):
+                y_min, y_max = float(np.min(y_valid)), float(np.max(y_valid))
+            else:
+                y_min, y_max = 0, 1
+            self.y_ranges[signal_name] = (y_min, y_max)
+
         self.setup_plots(self.target_signals)
-        # Controls for chunk size and scrollbar
+
+        # Controls cleanup
         if self.chunk_size_spinbox:
             self.controls_layout.removeWidget(self.chunk_size_spinbox)
             self.chunk_size_spinbox.deleteLater()
             self.chunk_size_spinbox = None
         if self.scrollbar:
             self.controls_layout.removeWidget(self.scrollbar)
-            self.scrollbar.setParent(None)
+            self.scrollbar.deleteLater()
             self.scrollbar = None
-        # SpinBox for chunk size
+
+        # Chunk size spinbox
         self.chunk_size_spinbox = QSpinBox()
         self.chunk_size_spinbox.setMinimum(1)
         self.chunk_size_spinbox.setMaximum(3600)
@@ -115,117 +120,60 @@ class ViewerTab(QWidget):
         self.chunk_size_spinbox.valueChanged.connect(self.on_chunk_size_changed)
         self.controls_layout.addWidget(QLabel("Window:"))
         self.controls_layout.addWidget(self.chunk_size_spinbox)
+
         # Scrollbar
         self.scrollbar = QScrollBar()
         self.scrollbar.setOrientation(Qt.Horizontal)
-        min_fs = min(self.sampling_rates.values())
-        durations = [
-            self.time_axes[signal_name][-1]
-            for signal_name in self.target_signals
-            if signal_name in self.sampling_rates and signal_name in self.time_axes
-        ]
-        min_duration = int(min(durations)) if durations else 0
+        min_duration = int(min(self.time_axes[ch][-1] for ch in self.target_signals))
         self.scrollbar.setMinimum(0)
-        self.scrollbar.setMaximum(
-            min_duration - self.chunk_size if min_duration > self.chunk_size else 0
-        )
+        self.scrollbar.setMaximum(max(0, min_duration - self.chunk_size))
         self.scrollbar.setPageStep(1)
         self.scrollbar.setSingleStep(1)
         self.scrollbar.setValue(0)
         self.scrollbar.valueChanged.connect(self.request_chunk)
         self.controls_layout.addWidget(self.scrollbar)
-        # Chunk loader reusing the already loaded data_record
+
+        # Chunk loader
         self.chunk_loader = ChunkLoader(
-            self.file_path,
-            self.target_signals,
-            self.chunk_size,
-            signal_group=self.data_record,
+            manager=self.main_window.data_manager,
+            file_path=self.file_path,
+            channel_names=self.target_signals,
+            chunk_size=self.chunk_size,
         )
         self.chunk_loader.chunk_loaded.connect(self.update_chunk)
-        # Load first chunk
         self.request_chunk(0)
 
     def request_chunk(self, value):
-        """
-        Solicita un nuevo chunk de datos al cambiar la posición del scrollbar.
-        Args:
-            value (int): Initial second of the chunk to display.
-        """
         start = int(value)
         end = start + self.chunk_size
         self.chunk_loader.request_chunk(start, end)
 
     def update_chunk(self, start, end, data_dict):
-        """
-        Actualiza los gráficos con los datos del chunk solicitado.
-        Args:
-            start (int): Initial second of the chunk.
-            end (int): Final second of the chunk.
-            data_dict (dict): Dictionary {signal_name: chunk_data}
-        """
-        max_points = 5000  # Manual downsampling limit
         for i, signal_name in enumerate(self.target_signals):
             p = self.plots[i]
-            if not hasattr(p, "curve") or p.curve is None:
-                p.curve = p.plot([], [], pen="y", autoDownsample=True, antialias=False)
             fs = self.sampling_rates[signal_name]
             expected_len = int(self.chunk_size * fs)
-            if signal_name in data_dict:
-                y = data_dict[signal_name]
-                if len(y) < expected_len:
-                    y = np.concatenate(
-                        [y, np.full(expected_len - len(y), np.nan, dtype=np.float32)]
-                    )
-                t = np.arange(expected_len) / fs + start
-                if len(y) > max_points:
-                    step = int(np.ceil(len(y) / max_points))
-                    y = y[::step]
-                    t = t[::step]
-                else:
-                    step = 1
-                p.curve.setData(t, y, downsample=step, autoDownsample=True)
-                p.setXRange(start, start + self.chunk_size, padding=0)
-                if np.any(~np.isnan(y)):
-                    y_valid = y[~np.isnan(y)]
-                    y_min, y_max = float(np.min(y_valid)), float(np.max(y_valid))
-                    p.setYRange(y_min, y_max)
-                else:
-                    p.setYRange(0, 1)
-            else:
-                t = np.arange(expected_len) / fs + start
-                y = np.full(expected_len, np.nan, dtype=np.float32)
-                if len(y) > max_points:
-                    step = int(np.ceil(len(y) / max_points))
-                    y = y[::step]
-                    t = t[::step]
-                else:
-                    step = 1
-                p.curve.setData(t, y, downsample=step, autoDownsample=True)
-                p.setXRange(start, start + self.chunk_size, padding=0)
-                p.setYRange(0, 1)
+            y = data_dict.get(signal_name, np.full(expected_len, np.nan, dtype=np.float32))
+
+            if len(y) < expected_len:
+                y = np.concatenate([y, np.full(expected_len - len(y), np.nan, dtype=np.float32)])
+
+            t = np.arange(expected_len) / fs + start
+
+            max_points = 5000
+            if len(y) > max_points:
+                step = int(np.ceil(len(y) / max_points))
+                y = y[::step]
+                t = t[::step]
+
+            p.curve.setData(t, y)
+            p.setXRange(start, end, padding=0)
+            y_min, y_max = self.y_ranges.get(signal_name, (0, 1))
+            p.setYRange(y_min, y_max)
 
     def on_chunk_size_changed(self, value):
-        """
-        Actualiza el tamaño del chunk y recarga el chunk actual.
-        """
         self.chunk_size = value
-        # Update scrollbar maximum
-        durations = [
-            self.time_axes[signal_name][-1]
-            for signal_name in self.target_signals
-            if signal_name in self.sampling_rates and signal_name in self.time_axes
-        ]
-        min_duration = int(min(durations)) if durations else 0
-        self.scrollbar.setMaximum(
-            min_duration - self.chunk_size if min_duration > self.chunk_size else 0
-        )
-        # Update chunk loader
-        self.chunk_loader = ChunkLoader(
-            self.file_path,
-            self.target_signals,
-            self.chunk_size,
-            signal_group=self.data_record,
-        )
-        self.chunk_loader.chunk_loaded.connect(self.update_chunk)
-        # Reload current chunk
+        min_duration = int(min(self.time_axes[ch][-1] for ch in self.target_signals))
+        self.scrollbar.setMaximum(max(0, min_duration - self.chunk_size))
+        self.chunk_loader.chunk_size = value
         self.request_chunk(self.scrollbar.value())

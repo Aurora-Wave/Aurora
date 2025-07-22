@@ -1,0 +1,9 @@
+{
+  "file_path": "../../uploaded_files/AFT_20241126_188-PA.adicht",
+  "default_signals": [
+    "ECG",
+    "HR",        
+    "FBP",
+    "Valsalva"
+  ]
+}
