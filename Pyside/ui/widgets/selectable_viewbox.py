@@ -64,3 +64,14 @@ class SelectableViewBox(pg.ViewBox):
                 ev.accept()
                 return
         super().mouseClickEvent(ev)
+
+if __name__ == "__main__":
+    from PySide6.QtWidgets import QApplication, QMainWindow
+    import sys
+    app = QApplication(sys.argv)
+    window = QMainWindow()
+    menu_bar = window.menuBar()
+    file_menu = menu_bar.addMenu("File")
+     
+    window.show()
+    sys.exit(app.exec())

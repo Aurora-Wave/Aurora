@@ -149,18 +149,11 @@ class MainWindow(QMainWindow):
 
         # ViewerTab
         viewer = ViewerTab(self)
-        sampling_rates = {ch: meta.get("fs", {}).get(ch)
-                          for ch in selected_channels if ch in meta.get("fs", {})}
-        time_axes = {ch: self.data_manager.get_trace(path, ch).time for ch in selected_channels}
-        data_record = {ch: self.data_manager.get_trace(path, ch) for ch in selected_channels}
         viewer.load_data(
             file_path=path,
-            data_record=data_record,
-            sampling_rates=sampling_rates,
-            time_axes=time_axes,
             chunk_size=60,
-            target_signals=selected_channels
-        )
+            target_signals=selected_channels 
+            )
         idx = self.tab_widget.count() - 2
         self.tab_widget.insertTab(idx, viewer, os.path.basename(path))
         self.tab_widget.setCurrentIndex(idx)

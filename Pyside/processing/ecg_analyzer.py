@@ -12,10 +12,7 @@ class ECGAnalyzer:
     @staticmethod
     def detect_rr_peaks(ecg_signal: np.ndarray,
                         fs: float,
-                        wavelet: str = 'haar',
-                        swt_level: int = 4,
-                        min_rr_sec: float = 0.5
-                       ) -> np.ndarray:
+                        **kwargs) -> np.ndarray:
         """
         1) Adjusts decomposition level to the maximum allowed by the signal length.
         2) Computes undecimated SWT of ecg_signal.
@@ -32,20 +29,37 @@ class ECGAnalyzer:
         Returns:
             peaks: Array of sample indices where R-peaks are detected.
         """
-        # 1) Determine max possible SWT level given the signal length
-        max_lvl = pywt.swt_max_level(len(ecg_signal))
-        lvl = min(swt_level, max_lvl) if max_lvl >= 1 else 1
+        method = kwargs.get("method","wavelet")
+        wv = kwargs.get("wavelet","haar")
+        lv = kwargs.get("level",4)
+        dist = kwargs.get("min_dist",0.5)
 
-        # 2) Perform undecimated SWT
-        coeffs = pywt.swt(ecg_signal, wavelet, level=lvl)
-
-        # 3) Reconstruct the signal with ISWT
-        reconstructed = pywt.iswt(coeffs, wavelet)
-
-        # 4) Convert minimum RR interval from seconds to samples
-        min_dist = int(min_rr_sec * fs)
-
-        # 5) Detect peaks with the given minimum distance constraint
-        peaks, _ = find_peaks(reconstructed, distance=min_dist)
-
+        #if method == "wavelet":
+        #    # 1) Determine max possible SWT level given the signal length
+        #    max_lvl = pywt.swt_max_level(len(ecg_signal))
+        #    lvl = min(lv, max_lvl) if max_lvl >= 1 else 1
+        #    # 2) Perform undecimated SWT
+        #    coeffs = pywt.swt(ecg_signal, wv, level=lvl)
+        #    # 3) Reconstruct the signal with ISWT
+        #    reconstructed = pywt.iswt(coeffs, wv)
+        #    # 4) Convert minimum RR interval from seconds to samples
+        #    min_dist = int(dist * fs)
+        #    # 5) Detect peaks with the given minimum distance constraint
+        #    peaks, _ = find_peaks(reconstructed, distance=min_dist)
+        if method == "wavelet":
+        #    # 1) Determine max possible SWT level given the signal length
+        #    max_lvl = pywt.swt_max_level(len(ecg_signal))
+        #    lvl = min(lv, max_lvl) if max_lvl >= 1 else 1
+        #    # 2) Perform undecimated SWT
+            coeffs = pywt.wavedec(ecg_signal, wv, level=5)
+        #    # 3) Reconstruct the signal with ISWT
+            reconstructed = pywt.waverec(coeffs,wv)
+        #    # 4) Convert minimum RR interval from seconds to samples
+            min_dist = int(dist * fs)
+        #    # 5) Detect peaks with the given minimum distance constraint
+            peaks, _ = find_peaks(reconstructed, distance=min_dist)
+        
+        
+        if method == "pan_tonkins":
+            raise NotImplementedError
         return peaks

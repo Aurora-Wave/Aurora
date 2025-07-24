@@ -3,35 +3,37 @@ import pywt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QComboBox, QSpinBox, QDoubleSpinBox,
-    QPushButton, QMessageBox
+    QPushButton
 )
 import pyqtgraph as pg
-from processing.ecg_analyzer import ECGAnalyzer
+from processing.chunk_loader import ChunkLoader
+from PySide6.QtCore import Qt
 
 class AnalysisTab(QWidget):
     """
-    AnalysisTab: per-chunk visualization of ECG, HR_gen, and detected peaks.
+    AnalysisTab: chunk-based ECG/HR visualization and interactive R-peak editing.
+    Allows adding, deleting, and moving R-peaks with local HR update.
     """
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.data_manager = None
         self.file_path = None
         self.fs = 1.0
         self.duration = 0.0
-        self._max_lvl = 1
+        self._max_lvl = 5
 
         # Defaults
         self.wavelet    = 'haar'
         self.level      = 4
-        self.min_dist   = 0.5  # seconds for RR refractory
+        self.min_dist   = 0.5
         self.chunk_size = 60
         self.start_time = 0
 
-        # Track last HR parameters to avoid unnecessary recompute
-        self._last_hr_params = (None, None, None)
+        # Dragging state
+        self._dragged_peak_idx = None
+        self._is_dragging = False
 
-        # Layout setup
+        # Layout
         main = QVBoxLayout(self)
         ctrl = QHBoxLayout()
 
@@ -96,6 +98,9 @@ class AnalysisTab(QWidget):
             p.showGrid(x=True,y=True)
             p.getViewBox().setMouseEnabled(x=False, y=False)
 
+        # Disable context menu on ECG plot
+        self.ecg_plot.getViewBox().setMenuEnabled(False)
+
         self.ecg_plot.setLabel('bottom','Time (s)')
         self.ecg_plot.setLabel('left','Amplitude')
         self.hr_plot.setLabel('bottom','Time (s)')
@@ -106,8 +111,16 @@ class AnalysisTab(QWidget):
 
         main.addWidget(self.plots)
 
+        # Connect mouse events
+        self.ecg_plot.scene().sigMouseClicked.connect(self._on_ecg_click)
+
+        # Track last chunk for index conversion
+        self._last_chunk_start = 0
+        self._last_chunk_len = 0
+        self._last_peaks = None
+        self._last_ecg_chunk = None
+
     def update_analysis_tab(self, data_manager, file_path):
-        # init on file load
         self.data_manager = data_manager
         self.file_path = file_path
         ecg = self.data_manager.get_trace(file_path, "ECG")
@@ -115,15 +128,13 @@ class AnalysisTab(QWidget):
         length = len(ecg.data)
         self.duration = length / self.fs
 
-        # adjust SWT level range
-        max_lvl = pywt.swt_max_level(length)
-        self._max_lvl = max(1, max_lvl)
+        #max_lvl = pywt.swt_max_level(length)
+        #self._max_lvl = max(1, max_lvl)
         if self.level > self._max_lvl:
             self.level = self._max_lvl
         self.level_sb.setRange(1, self._max_lvl)
         self.level_sb.setValue(self.level)
 
-        # adjust chunk and start ranges
         self.chunk_sb.setRange(1, int(self.duration))
         self.chunk_sb.setValue(min(self.chunk_size, int(self.duration)))
         self.start_sb.setRange(0, int(self.duration - self.chunk_sb.value()))
@@ -149,74 +160,156 @@ class AnalysisTab(QWidget):
         chunk = self.chunk_sb.value()
         start = self.start_sb.value()
 
-        if lvl > self._max_lvl:
-            QMessageBox.warning(self, "Level Too High", f"Max level is {self._max_lvl}")
-            lvl = self._max_lvl
-            self.level_sb.setValue(lvl)
-
-        # ECG chunk retrieval
-        ecg_chunk = self.data_manager.get_chunk(self.file_path, "ECG", start, chunk)
+        # ECG chunk
+        ecg_chunk = ChunkLoader.get_chunk(
+            self.data_manager, self.file_path, ["ECG"], start, chunk)
         t_ecg = np.arange(len(ecg_chunk)) / self.fs + start
 
-        # HR_gen chunk retrieval: recompute only on param change
-        curr_params = (wav, lvl, md)
-        if curr_params != self._last_hr_params:
-            self.data_manager._files[self.file_path]['signal_cache'].pop('HR_gen', None)
-            self._last_hr_params = curr_params
-
+        # HR_gen global (full signal)
         hr_sig = self.data_manager.get_trace(
             self.file_path,
-            "HR_gen",
+            "HR_GEN",
             wavelet=wav,
             swt_level=lvl,
             min_rr_sec=md
         )
-        mask = (hr_sig.time >= start) & (hr_sig.time < start + chunk)
-        hr_t = hr_sig.time[mask]
-        hr_v = hr_sig.data[mask]
+        hr_t = hr_sig.time
+        hr_v = hr_sig.data
 
-        # compute global min/max of HR for consistent y-limits with 10-unit padding
-        if hr_v.size:
-            hr_min = hr_v.min() - 10
-            hr_max = hr_v.max() + 10
-        else:
-            hr_min, hr_max = 0, 100  # defaults if empty
+        # HR_gen chunk
+        mask = (hr_t >= start) & (hr_t < start + chunk)
+        hr_t_chunk = hr_t[mask]
+        hr_v_chunk = hr_v[mask]
 
-        # compute wavelet shape for display
+        # Detected R-peaks (global indices)
+        r_peaks = hr_sig.r_peaks
+        peaks_in_chunk = r_peaks[(r_peaks >= int(start * self.fs)) & (r_peaks < int((start + chunk) * self.fs))]
+        t_peaks = (peaks_in_chunk / self.fs)
+        y_peaks = ecg_chunk[(peaks_in_chunk - int(start * self.fs)).astype(int)]
+
+        # Plot ECG with peaks
+        self.ecg_plot.clear()
+        self.ecg_plot.plot(t_ecg, ecg_chunk, pen='b')
+        self.ecg_plot.plot(t_peaks, y_peaks, pen=None, symbol='o', symbolBrush='r', symbolSize=10)
+
+        # Store for mouse interaction
+        self._last_chunk_start = start
+        self._last_chunk_len = chunk
+        self._last_peaks = peaks_in_chunk
+        self._last_ecg_chunk = ecg_chunk
+
+        # Plot HR_gen
+        self.hr_plot.clear()
+        if hr_v_chunk.size:
+            hr_min = hr_v_chunk.min() - 10
+            hr_max = hr_v_chunk.max() + 10
+            self.hr_plot.plot(hr_t_chunk, hr_v_chunk, pen='g')
+            self.hr_plot.setYRange(hr_min, hr_max)
+
+        # Wavelet
         try:
             _, psi, x = pywt.Wavelet(wav).wavefun(level=lvl)
         except:
             psi, x = pywt.Wavelet(wav).wavefun()[:2]
-
-        # draw ECG and overlay detected R-peaks
-        self._draw_ecg(t_ecg, ecg_chunk)
-        try:
-            peak_indices = ECGAnalyzer.detect_rr_peaks(
-                ecg_chunk,
-                self.fs,
-                wav,
-                lvl,
-                md
-            )
-            peak_times = peak_indices / self.fs + start
-            peak_amps = ecg_chunk[peak_indices]
-            self.ecg_plot.plot(peak_times, peak_amps, pen=None, symbol='o')
-        except Exception:
-            pass
-
-        # draw HR with new y-limits
-        self.hr_plot.clear()
-        if hr_v.size:
-            self.hr_plot.plot(hr_t, hr_v, pen='g')
-            self.hr_plot.setYRange(hr_min, hr_max)
-
-        # draw wavelet plot
-        self._draw_wavelet(x, psi)
-
-    def _draw_ecg(self, t, data):
-        self.ecg_plot.clear()
-        self.ecg_plot.plot(t, data, pen='b')
-
-    def _draw_wavelet(self, x, psi):
         self.wave_plot.clear()
         self.wave_plot.plot(x, psi, pen='m')
+
+    # Mouse interaction: click-inicio y click-destino
+    def _on_ecg_click(self, event):
+        pos = event.scenePos()
+        vb = self.ecg_plot.getViewBox()
+        mouse_point = vb.mapSceneToView(pos)
+        t_click = mouse_point.x()
+        fs = self.fs
+        global_idx = int(t_click * fs)
+        hr_sig = self.data_manager.get_trace(
+            self.file_path,
+            "HR_GEN",
+            wavelet=self.wavelet_cb.currentText(),
+            swt_level=self.level_sb.value(),
+            min_rr_sec=self.dist_sb.value()
+        )
+        tolerance = int(0.05 * fs)
+        idx_near = np.where(np.abs(hr_sig.r_peaks - global_idx) <= tolerance)[0]
+
+        if event.button() == Qt.LeftButton:
+            if self._is_dragging and self._dragged_peak_idx is not None:
+                # Click-destino: mueve el peak seleccionado
+                window = int(0.1 * fs)
+                raw_ecg = self.data_manager.get_trace(self.file_path, "ECG").data
+                search_start = max(global_idx - window, 0)
+                search_end = min(global_idx + window, len(raw_ecg))
+                local_max_idx = np.argmax(np.abs(raw_ecg[search_start:search_end])) + search_start
+                hr_sig.update_peak(self._dragged_peak_idx, local_max_idx)
+                hr_sig._data = hr_sig._data.copy()
+                self._dragged_peak_idx = None
+                self._is_dragging = False
+                self._update()
+            elif idx_near.size:
+                # Click-inicio: seleccionar peak para mover
+                self._dragged_peak_idx = idx_near[0]
+                self._is_dragging = True
+            else:
+                # Agregar peak
+                self._handle_add_peak(event)
+        elif event.button() == Qt.RightButton:
+            self._handle_delete_peak(event)
+
+    def _handle_add_peak(self, event):
+        pos = event.scenePos()
+        vb = self.ecg_plot.getViewBox()
+        mouse_point = vb.mapSceneToView(pos)
+        t_click = mouse_point.x()
+        fs = self.fs
+        global_idx = int(t_click * fs)
+        hr_sig = self.data_manager.get_trace(
+            self.file_path,
+            "HR_GEN",
+            wavelet=self.wavelet_cb.currentText(),
+            swt_level=self.level_sb.value(),
+            min_rr_sec=self.dist_sb.value()
+        )
+        # Only add if not too close to another peak
+        tolerance = int(0.05 * fs)
+        if np.all(np.abs(hr_sig.r_peaks - global_idx) > tolerance):
+            window = int(0.1 * fs)
+            raw_ecg = self.data_manager.get_trace(self.file_path, "ECG").data
+            search_start = max(global_idx - window, 0)
+            search_end = min(global_idx + window, len(raw_ecg))
+            local_max_idx = np.argmax(np.abs(raw_ecg[search_start:search_end])) + search_start
+            hr_sig.r_peaks = np.sort(np.append(hr_sig.r_peaks, local_max_idx))
+            # Update only the segments around the new peak
+            i = np.searchsorted(hr_sig.r_peaks, local_max_idx)
+            if i > 0:
+                hr_sig._update_hr_segment(i - 1)
+            if i < len(hr_sig.r_peaks) - 1:
+                hr_sig._update_hr_segment(i)
+            hr_sig._data = hr_sig._data.copy()
+            self._update()
+
+    def _handle_delete_peak(self, event):
+        pos = event.scenePos()
+        vb = self.ecg_plot.getViewBox()
+        mouse_point = vb.mapSceneToView(pos)
+        t_click = mouse_point.x()
+        fs = self.fs
+        global_idx = int(t_click * fs)
+        hr_sig = self.data_manager.get_trace(
+            self.file_path,
+            "HR_GEN",
+            wavelet=self.wavelet_cb.currentText(),
+            swt_level=self.level_sb.value(),
+            min_rr_sec=self.dist_sb.value()
+        )
+        tolerance = int(0.05 * fs)
+        idx_near = np.where(np.abs(hr_sig.r_peaks - global_idx) <= tolerance)[0]
+        if idx_near.size:
+            peak_idx = idx_near[0]
+            hr_sig.r_peaks = np.delete(hr_sig.r_peaks, peak_idx)
+            # Update HR around removed peak
+            if peak_idx > 0:
+                hr_sig._update_hr_segment(peak_idx - 1)
+            if peak_idx < len(hr_sig.r_peaks) - 1:
+                hr_sig._update_hr_segment(peak_idx)
+            hr_sig._data = hr_sig._data.copy()
+            self._update()

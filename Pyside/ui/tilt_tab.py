@@ -2,22 +2,20 @@ import numpy as np
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView,
-    QLineEdit, QAbstractItemView, QPushButton,
-    QSpinBox, QScrollBar, QMessageBox
+    QLineEdit, QAbstractItemView, QSpinBox, QScrollBar
 )
 from PySide6.QtCore import Qt
 import pyqtgraph as pg
 from data.data_manager import DataManager
 from core.interval_extractor import extract_event_intervals
-from core.comments import EMSComment
-from processing.ecg_analyzer import ECGAnalyzer
 
 class TiltTab(QWidget):
     """
-    Tab to visualize tilt events and manage EMSComment annotations across all channels.
+    Tab to visualize tilt events (intervals) across all channels.
     Loads a full 10-minute context window but displays a user-defined chunk size.
     Enables panning across the full context, zoom disabled, synchronized across channels.
     """
+
     def __init__(self, parent=None):
         super().__init__(parent)
         # Data attributes
@@ -25,7 +23,6 @@ class TiltTab(QWidget):
         self.file_path: str = None
         self.channel_names: list[str] = []
         self.intervals: list[dict] = []
-        self.comments: list[EMSComment] = []
         self._selected_idx: int | None = None
         # Visualization parameters
         self._chunk_size: float = 60.0  # seconds
@@ -49,10 +46,6 @@ class TiltTab(QWidget):
         # Controls
         self.filter_box = QLineEdit(placeholderText="Filter events...")
         self.filter_box.textChanged.connect(self._apply_filter)
-        self.add_btn = QPushButton("Add comment")
-        self.add_btn.clicked.connect(self._add_comment)
-        self.del_btn = QPushButton("Delete comment")
-        self.del_btn.clicked.connect(self._delete_comment)
         self.chunk_spin = QSpinBox()
         self.chunk_spin.setSuffix(" s")
         self.chunk_spin.setRange(1, 600)
@@ -64,8 +57,6 @@ class TiltTab(QWidget):
         ctrl = QHBoxLayout()
         ctrl.addWidget(QLabel("Search:"))
         ctrl.addWidget(self.filter_box)
-        ctrl.addWidget(self.add_btn)
-        ctrl.addWidget(self.del_btn)
         ctrl.addStretch()
         ctrl.addWidget(QLabel("Chunk:"))
         ctrl.addWidget(self.chunk_spin)
@@ -85,37 +76,25 @@ class TiltTab(QWidget):
         # Initialize data manager and path
         self.data_manager = dm
         self.file_path = path
-        # Compute HR_gen
-        ecg = dm.get_trace(path, "ECG")
-        ecg.detect_r_peaks(wavelet="haar", swt_level=4, min_rr_sec=0.5)
-        dm.get_trace(path, "HR_gen", wavelet="haar", swt_level=4, min_rr_sec=0.5)
         # Determine channels
         meta = set(dm.get_available_channels(path))
         cache = {k.split("|")[0] for k in dm._files[path]["signal_cache"]}
         available = meta.union(cache)
         order = ["ECG", "HR_gen", "FBP", "Valsalva"]
         self.channel_names = [ch for ch in order if ch in available]
-        # Extract intervals
+        # Extract intervals (events)
         signals = [dm.get_trace(path, ch) for ch in self.channel_names]
         self.intervals = extract_event_intervals(signals)
-        # Load user comments
-        self.comments = []
-        for ch in self.channel_names:
-            sig = dm.get_trace(path, ch)
-            for c in getattr(sig, "MarkerData", []):
-                if isinstance(c, EMSComment) and c.user_defined:
-                    self.comments.append(c)
         self._selected_idx = None
         self._populate_table()
         # Set context window (10 minutes)
+        max_durations = [max(dm.get_trace(path, ch).time) for ch in self.channel_names]
         self._context_start = 0.0
         self._context_end = min(
-            max(dm.get_trace(path, ch).time),
+            max(max_durations),
             self._context_start + 600.0
         )
-        # Configure scrollbar
         self._setup_scroll()
-        # Render initial chunk
         self._render_chunk()
 
     def _populate_table(self):
@@ -164,39 +143,22 @@ class TiltTab(QWidget):
         w_start = self._context_start + self._offset
         w_end = min(w_start + self._chunk_size, self._context_end)
         max_pts = 5000
-        # Prepare each plot
         for idx, ch in enumerate(self.channel_names):
-            sig = (self.data_manager.get_trace(
-                self.file_path, ch,
-                wavelet="haar", swt_level=4, min_rr_sec=0.5
-            ) if ch == "HR_gen" else self.data_manager.get_trace(self.file_path, ch))
-            # Get time/data
-            if ch == "HR_gen":
-                t = sig.time
-                y = sig.data
-            else:
-                data = sig.get_full_signal(include_time=True)
-                if isinstance(data, tuple):
-                    y, t = data
-                else:
-                    y = data
-                    t = np.arange(len(data)) / sig.fs
-            # Mask for chunk
+            sig = self.data_manager.get_trace(self.file_path, ch)
+            t = sig.time
+            y = sig.data
             mask = (t >= w_start) & (t < w_end)
             t_seg = t[mask]
             y_seg = y[mask]
-            # Downsample
             if len(y_seg) > max_pts:
                 step = int(np.ceil(len(y_seg) / max_pts))
                 t_seg = t_seg[::step]
                 y_seg = y_seg[::step]
-            # Create plot
             p = self.plot_widget.addPlot(row=idx, col=0, title=ch)
             vb = p.getViewBox()
             vb.setMouseMode(pg.ViewBox.PanMode)
             vb.setMouseEnabled(x=True, y=False)
             vb.setLimits(xMin=self._context_start, xMax=self._context_end)
-            vb.sigXRangeChanged.connect(self._sync_pan)
             p.plot(t_seg, y_seg, pen=pg.mkPen("y", width=1))
             p.setXRange(w_start, w_end, padding=0)
             if y_seg.size:
@@ -204,12 +166,6 @@ class TiltTab(QWidget):
                 if fv.size:
                     p.setYRange(float(fv.min()), float(fv.max()))
             self.plots[ch] = p
-
-    def _sync_pan(self, vb, x_range):
-        left, right = x_range
-        for p in self.plots.values():
-            if p.getViewBox() is not vb:
-                p.setXRange(left, right, padding=0)
 
     def _on_row_selected(self, row, col):
         self._selected_idx = row
@@ -219,44 +175,3 @@ class TiltTab(QWidget):
         self._context_end = evt + 300
         self._setup_scroll()
         self._render_chunk()
-
-    def _add_comment(self):
-        if self._selected_idx is None:
-            QMessageBox.warning(self, "Warning", "Select event first")
-            return
-        evt = self.intervals[self._selected_idx].get("t_evento", 0)
-        cid = max((c.comment_id for c in self.comments), default=0) + 1
-        cnt = 0
-        for ch in self.channel_names:
-            sig = self.data_manager.get_trace(self.file_path, ch)
-            c = EMSComment(
-                text="User annotation",
-                tick_position=int(evt * sig.fs),
-                channel=sig.name,
-                comment_id=cid,
-                tick_dt=1.0 / sig.fs,
-                time_sec=evt,
-                user_defined=True
-            )
-            sig.MarkerData.append(c)
-            self.comments.append(c)
-            cnt += 1
-        QMessageBox.information(self, "Comment", f"Added to {cnt} channels")
-
-    def _delete_comment(self):
-        if self._selected_idx is None:
-            QMessageBox.warning(self, "Warning", "Select event first")
-            return
-        evt = self.intervals[self._selected_idx].get("t_evento", 0)
-        to_remove = [c for c in self.comments if c.time_sec == evt and c.user_defined]
-        if not to_remove:
-            QMessageBox.information(self, "Delete", "No user comments")
-            return
-        cnt = 0
-        for c in to_remove:
-            sig = self.data_manager.get_trace(self.file_path, c.channel)
-            if c in sig.MarkerData:
-                sig.MarkerData.remove(c)
-                cnt += 1
-        self.comments = [c for c in self.comments if c not in to_remove]
-        QMessageBox.information(self, "Delete", f"Deleted {cnt} comments")

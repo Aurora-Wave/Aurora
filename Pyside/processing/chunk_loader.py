@@ -1,50 +1,66 @@
-
 from PySide6.QtCore import QObject, Signal as QtSignal
 import numpy as np
 
-
 class ChunkLoader(QObject):
     """
-    Loads chunks of data lazily from file via DataManager.
-    Emits a signal when chunk is ready.
+    Qt-based chunk loader for physiological signals.
+    Includes both synchronous (static) and asynchronous (QtSignal) interfaces.
     """
 
-    chunk_loaded = QtSignal(int, int, dict)  # start, end, {channel: chunk}
+    chunk_loaded = QtSignal(float, float, dict)  # start_sec, end_sec, {channel: chunk}
 
-    def __init__(self, manager, file_path, channel_names, chunk_size=30, parent=None):
-        """
-        Args:
-            manager (DataManager): Instance of the DataManager.
-            file_path (str): Path to the loaded file.
-            channel_names (list[str]): List of channels to load.
-            chunk_size (int): Chunk duration in seconds.
-        """
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.manager = manager
-        self.file_path = file_path
-        self.channel_names = channel_names
-        self.chunk_size = chunk_size
 
-    def request_chunk(self, start_time, end_time):
+    @staticmethod
+    def get_chunk(data_manager, file_path: str, channel_names: list[str],
+                  start_sec: float, duration_sec: float):
         """
-        Request a chunk of data for all channels.
+        Synchronously extract the chunk(s) of data requested from DataManager.
+        Returns the chunk(s) immediately (blocking call).
 
         Args:
-            start_time (float): Start time in seconds.
-            end_time (float): End time in seconds.
+            data_manager: DataManager instance.
+            file_path (str): Path to the file loaded in DataManager.
+            channel_names (list[str]): Names of channels to extract.
+            start_sec (float): Start time (seconds).
+            duration_sec (float): Duration (seconds).
+
+        Returns:
+            If only one channel: np.ndarray.
+            If multiple: dict {channel: np.ndarray}.
+        """
+        results = {}
+        for ch in channel_names:
+            sig = data_manager.get_trace(file_path, ch)
+            if sig is None:
+                continue
+            fs = sig.fs
+            data = sig.data
+            start_idx = int(max(0, min(start_sec * fs, len(data) - 1)))
+            end_idx = int(max(start_idx + 1, min((start_sec + duration_sec) * fs, len(data))))
+            chunk = data[start_idx:end_idx]
+            results[ch] = chunk
+
+        if len(results) == 1:
+            return next(iter(results.values()))
+        return results
+
+    def request_chunk(self, data_manager, file_path: str, channel_names: list[str],
+                      start_sec: float, duration_sec: float):
+        """
+        Asynchronously extract the chunk(s) and emit result via QtSignal.
         """
         result = {}
-        for ch in self.channel_names:
-            try:
-                chunk = self.manager.get_chunk(
-                    self.file_path,
-                    ch,
-                    start_time,
-                    end_time - start_time
-                )
-                result[ch] = chunk
-            except Exception as e:
-                print(f"⚠️ Error loading chunk for channel '{ch}': {e}")
-                result[ch] = np.array([])
+        for ch in channel_names:
+            sig = data_manager.get_trace(file_path, ch)
+            if sig is None:
+                continue
+            fs = sig.fs
+            data = sig.data
+            start_idx = int(max(0, min(start_sec * fs, len(data) - 1)))
+            end_idx = int(max(start_idx + 1, min((start_sec + duration_sec) * fs, len(data))))
+            chunk = data[start_idx:end_idx]
+            result[ch] = chunk
 
-        self.chunk_loaded.emit(int(start_time), int(end_time), result)
+        self.chunk_loaded.emit(start_sec, start_sec + duration_sec, result)

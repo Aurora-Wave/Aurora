@@ -10,12 +10,6 @@ class BaseLoader(ABC):
     def get_metadata(self) -> dict:
         """Return basic metadata about the file (channels, duration, fs, etc)."""
         pass
-
-    @abstractmethod
-    def get_chunk(self, channel: str, start: float, duration: float):
-        """Return a chunk of signal data from a specific channel."""
-        pass
-
     @abstractmethod
     def get_full_trace(self, channel: str):
         """Return the complete signal (Signal or ECGSignal object)."""

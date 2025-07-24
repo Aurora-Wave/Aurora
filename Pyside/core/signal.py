@@ -6,30 +6,25 @@ from processing.ecg_analyzer import ECGAnalyzer
 class Signal:
     """
     Represents a single physiological signal, including time series data,
-    units, sampling frequency, and optional buffers, annotations, and analysis fields.
+    units, sampling frequency, and optional buffers and annotations.
     """
-
     def __init__(self, name: str, data: np.ndarray, time: np.ndarray,
                  units: str = "a.u.", fs: float = 1.0):
+        # signal metadata
         self.name = name
         self.units = units
         self.fs = fs
 
+        # core data arrays
         self._data = np.asarray(data)
         self._time = np.asarray(time)
 
-        # Optional pre/post padding buffers
-        self.BB = np.array([])   # before buffer
-        self.AB = np.array([])   # after buffer
+        # optional buffers
+        self.BB = np.array([])  # before-buffer
+        self.AB = np.array([])  # after-buffer
 
-        # Annotations
+        # annotations (e.g., markers)
         self.MarkerData = []
-
-        # ECG‐specific analysis placeholders
-        self.FMxI = np.array([])  # R‐peak sample indices
-        self.CL   = np.array([])  # RR intervals in samples
-        self.CLI  = np.array([])  # second peak index of each RR interval
-        self.CLT  = np.array([])  # time of each RR in seconds
 
     @property
     def data(self) -> np.ndarray:
@@ -38,17 +33,6 @@ class Signal:
     @property
     def time(self) -> np.ndarray:
         return self._time
-
-    def get_full_signal(self, include_time: bool = False):
-        """
-        Return the full signal including BB and AB buffers.
-        """
-        full = np.concatenate([self.BB, self._data, self.AB])
-        if include_time:
-            n = len(full)
-            t = np.linspace(1/self.fs, n/self.fs, n)
-            return full, t
-        return full
 
     def to_csv(self, filepath: str):
         """
@@ -62,93 +46,118 @@ class Signal:
 
     def __str__(self):
         n = len(self._data)
-        dur = (self._time[-1] - self._time[0]) if n>1 else 0
-        preview = np.round(self._data[:min(10,n)], 3)
+        dur = (self._time[-1] - self._time[0]) if n > 1 else 0
+        preview = np.round(self._data[:min(10, n)], 3)
         return (f"Signal '{self.name}': {n} samples, {dur:.2f}s, fs={self.fs}Hz\n"
                 f"First data pts: {preview}")
 
 
-class ECGSignal(Signal):
+class HR_Gen_Signal(Signal):
     """
-    Specialized Signal for ECG: integrates R-peak detection via ECGAnalyzer
-    and builds an HR signal from RR intervals.
+    Specialized Signal for derived HR: integrates R-peak detection
+    and incremental HR updates.
     """
-
-    def __init__(self, **kwargs):
-        """
-        Accepts same kwargs as Signal.__init__: name, data, time, units, fs.
-        """
-        super().__init__(**kwargs)
+    def __init__(self, name: str, ecg_data: np.ndarray, ecg_time: np.ndarray,
+                 units: str, fs: float):
+        # initialize base signal with raw ECG data
+        super().__init__(name=name,data=ecg_data,time=ecg_time,units=units,fs=fs)
+        # container for detected peak indices
         self.r_peaks = np.array([])
-        self.rr_intervals = np.array([])
-        self.rr_times = np.array([])
 
-    def detect_r_peaks(self,
-                       wavelet: str = 'db3',
-                       swt_level: int = 3,
-                       min_rr_sec: float = 0.4):
+    def set_r_peaks(self, ECG: Signal, **kargs):
         """
-        Detect R‐peaks in the full ECG (including BB/AB).
-        Populates:
-          - self.FMxI: sample indices of R‐peaks
-          - self.CL:   RR intervals in samples
-          - self.CLI:  index of the 2nd peak in each RR (i.e. self.FMxI[1:])
-          - self.CLT:  time of that 2nd peak (seconds)
+        Detect R-peaks and generate the full HR series.
         """
-        # build the full signal
-        if self.BB.size and self.AB.size:
-            ecg_full = np.concatenate([self.BB, self._data, self.AB])
-        else:
-            ecg_full = self._data
+        # detect peaks on raw ECG
+        peaks = ECGAnalyzer.detect_rr_peaks(ECG.data, ECG.fs, **kargs)
+        self.r_peaks = np.sort(np.asarray(peaks))
+        # fill in HR values across entire signal
+        self._generate_full_hr()
 
-        # detect peaks via the unified method
-        peaks = ECGAnalyzer.detect_rr_peaks(
-            ecg_full,
-            fs=self.fs,
-            wavelet=wavelet,
-            swt_level=swt_level,
-            min_rr_sec=min_rr_sec
-        )
-
-        # store results
-        self.FMxI = np.asarray(peaks)
-        if len(self.FMxI) > 1:
-            # RR intervals in samples
-            self.CL = np.diff(self.FMxI)
-            # second peak index per interval
-            self.CLI = self.FMxI[1:]
-            # time of each RR in seconds
-            self.CLT = self.CLI / self.fs
-        else:
-            self.CL = np.array([])
-            self.CLI = np.array([])
-            self.CLT = np.array([])
-
-    def get_hr_signal(self) -> Signal | None:
+    def _generate_full_hr(self):
         """
-        Return a new Signal named 'HR_gen' representing instantaneous HR.
-        Requires detect_r_peaks() to have been called first.
+        Internal: fill HR values between each pair of R-peaks.
         """
-        if self.CLT.size == 0:
+        if len(self.r_peaks) < 2:
+            return
+        hr_data = np.zeros_like(self._data)
+        # compute HR for each interval
+        for i in range(len(self.r_peaks) - 1):
+            start = int(self.r_peaks[i])
+            end = int(self.r_peaks[i + 1])
+            rr = (end - start) / self.fs
+            if rr <= 0:
+                continue
+            hr = 60.0 / rr
+            hr_data[start:end] = hr
+        self._data = hr_data
+        self.units = "bpm"
+
+    def add_peak(self, new_peak: int):
+        """
+        Append a new R-peak and update only the new segment's HR.
+        """
+        if self.r_peaks.size == 0:
+            # first peak: store and wait for next
+            self.r_peaks = np.array([new_peak])
+            return
+        last = int(self.r_peaks[-1])
+        if new_peak <= last:
+            raise ValueError("New peak must be greater than last detected peak.")
+        # compute HR for the new interval
+        rr = (new_peak - last) / self.fs
+        if rr <= 0:
+            return
+        hr = 60.0 / rr
+        # append and fill segment
+        self.r_peaks = np.append(self.r_peaks, new_peak)
+        self._data[last:new_peak] = hr
+
+    def update_peak(self, i: int, new_index: int):
+        """
+        Modify an existing R-peak and update affected HR segments.
+        """
+        if not (0 <= i < len(self.r_peaks)):
+            return
+        self.r_peaks[i] = new_index
+        self.r_peaks = np.sort(self.r_peaks)
+        # update segments around the modified peak
+        if i > 0:
+            self._update_hr_segment(i - 1)
+        if i < len(self.r_peaks) - 1:
+            self._update_hr_segment(i)
+
+    def _update_hr_segment(self, i: int):
+        """
+        Recompute HR for interval between r_peaks[i] and r_peaks[i+1].
+        """
+        start = int(self.r_peaks[i])
+        end = int(self.r_peaks[i + 1])
+        rr = (end - start) / self.fs
+        if rr <= 0 or start >= end:
+            return
+        hr = 60.0 / rr
+        self._data[start:end] = hr
+
+    def get_hr_signal(self):
+        """
+        Return a standalone Signal object of the HR series.
+        """
+        if len(self.r_peaks) < 2:
             return None
-
-        hr_data = 60.0 / (self.CL / self.fs)  # bpm
-        hr_time = self.CLT
-
         return Signal(
-            name="HR_gen",
-            data=hr_data,
-            time=hr_time,
+            name=f"{self.name}_HRgen",
+            data=self._data.copy(),
+            time=self._time.copy(),
             units="bpm",
-            fs=1.0
+            fs=self.fs
         )
 
 
 class SignalGroup:
     """
-    Container for multiple Signal or ECGSignal objects.
+    Container for multiple Signal or Signal subclasses.
     """
-
     def __init__(self, signals: list[Signal]):
         self.signals = {sig.name: sig for sig in signals}
 
