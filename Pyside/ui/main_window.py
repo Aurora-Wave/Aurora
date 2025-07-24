@@ -6,8 +6,8 @@ import logging
 import numpy as np
 from PySide6.QtWidgets import (
     QMainWindow, QFileDialog, QMessageBox,
-    QTabWidget, QToolBar
-)
+    QTabWidget, QToolBar)
+
 from PySide6.QtGui import QAction
 from data.data_manager import DataManager
 from ui.viewer_tab import ViewerTab
@@ -52,12 +52,28 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.tilt_tab, "Tilt Protocol")
         self.tab_widget.addTab(self.analysis_tab, "Signal Analysis")
 
+
+        # Menubar
+        #self._init_menubar():
+
         # Toolbar
         self._init_toolbar()
 
         # Attempt to load last session config
         self._load_config_if_exists()
 
+
+
+
+    # Menubar definition
+    def _init_menubar(self):
+        menu_bar = self.menuBar()
+        file_menu = menu_bar.addMenu("Files")
+        export_menu = menu_bar.addMenu("Export")
+        export_menu.addAction("Exportar marcadores", self.export_marke)
+
+
+    # Toolbar definition
     def _init_toolbar(self):
         toolbar = QToolBar("Main Toolbar", self)
         self.addToolBar(toolbar)
