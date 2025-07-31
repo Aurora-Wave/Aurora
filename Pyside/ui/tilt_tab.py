@@ -40,6 +40,7 @@ class TiltTab(QWidget):
         self.channel_names: list[str] = []
         self.intervals: list[dict] = []
         self._selected_idx: int | None = None
+        self.hr_params:dict = {}
 
         # Visualization parameters
         self._chunk_size: float = 60.0  # seconds
@@ -78,13 +79,12 @@ class TiltTab(QWidget):
         self.chunk_spin.setValue(int(self._chunk_size))
         self.chunk_spin.valueChanged.connect(self._on_chunk_changed)
 
-        # ──────────── Improved Horizontal ScrollBar ────────────
         self.scrollbar = QScrollBar(Qt.Horizontal)
         # make it expand horizontally
         self.scrollbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         # give it a visible height
-        self.scrollbar.setMinimumHeight(20)
-        self.scrollbar.setMaximumHeight(20)
+        self.scrollbar.setMinimumHeight(10)
+        self.scrollbar.setMaximumHeight(10)
         self.scrollbar.valueChanged.connect(self._on_scroll_changed)
         # Configurar tamaño mínimo para la barra de desplazamiento
         self.scrollbar.setMinimumWidth(300)  # Ancho mínimo de 300px
@@ -111,28 +111,48 @@ class TiltTab(QWidget):
         layout.addWidget(self.table, stretch=1)
         layout.addWidget(self.plot_widget, stretch=3)
 
-    def update_tilt_tab(self, dm: DataManager, path: str):
+    #def update_tilt_tab(self, dm: DataManager, path: str):
+    def update_tilt_tab(self, dm: DataManager, path: str,hr_params:dict):
         # Initialize data manager and path
         self.data_manager = dm
         self.file_path = path
+        #Store HR_gen params for later chunk updates
+        self.hr_params = hr_params
 
         # Determine channels: from metadata + cache (to include HR_gen)
         meta = set(dm.get_available_channels(path))
+        self.logger.info("Triying to update tilt tab with new info")
         cache = {k.split("|")[0] for k in dm._files[path]["signal_cache"]}
+        self.logger.debug(f"cache list of channels {cache}")
         available = meta.union(cache)
         order = ["ECG", "HR_gen", "FBP", "Valsalva"]
         self.channel_names = [ch for ch in order if ch in available]
 
         # Extract intervals (events)
-        signals = [dm.get_trace(path, ch) for ch in self.channel_names]
+        #signals = [dm.get_trace(path, ch) for ch in self.channel_names]
+        #self.intervals = extract_event_intervals(signals)
+        # Extract intervals (events), using hr_params for HR_gen
+        signals = [dm.get_trace(path, ch, **self.hr_params) if ch.upper() == "HR_GEN" else dm.get_trace(path, ch) for ch in self.channel_names]
         self.intervals = extract_event_intervals(signals)
+        self._selected_idx = None
         self._selected_idx = None
 
         # Populate table of events
         self._populate_table()
 
-        # Set context window to first 10 minutes (or less)
-        max_durations = [max(dm.get_trace(path, ch).time) for ch in self.channel_names]
+        ### Set context window to first 10 minutes (or less)
+        ###max_durations = [max(dm.get_trace(path, ch).time) for ch in self.channel_names]
+        
+        
+        # Set context window to first 10 minutes (or less), using hr_params for HR_gen
+        max_durations = []
+        for ch in self.channel_names:
+            if ch.upper() == "HR_GEN":
+                sig = dm.get_trace(path, ch, **self.hr_params)
+            else:
+                sig = dm.get_trace(path, ch)
+                max_durations.append(max(sig.time))
+
         self._context_start = 0.0
         self._context_end = min(max(max_durations), self._context_start + 600.0)
 
@@ -206,30 +226,38 @@ class TiltTab(QWidget):
 
     def _update_chunk(self, start_sec, end_sec, data_dict):
         """Update plots with chunk data efficiently."""
-        # Clear plots only if needed (first time or channel count changed)
+        # If channel count changed, rebuild the entire grid
         if len(self.plots) != len(self.channel_names):
             self.plot_widget.clear()
             self.plots.clear()
             self.plot_curves.clear()
             self._setup_plots()
 
-        # Update each channel's data
         for idx, ch in enumerate(self.channel_names):
-            if idx >= len(self.plots):
-                continue
-
+            # Retrieve the PlotItem for this channel
             plot_item = self.plots[ch]
-            chunk_data = data_dict.get(ch, np.array([]))
 
-            if chunk_data.size == 0:
-                continue
-
-            # Get signal info for time axis
-            sig = self.data_manager.get_trace(self.file_path, ch)
-            fs = sig.fs
-
-            # Create time array
-            t = np.arange(len(chunk_data)) / fs + start_sec
+            # For HR_gen, re-fetch with the current HR parameters
+            if ch.upper() == "HR_GEN":
+                sig = self.data_manager.get_trace(
+                    self.file_path, ch, **self.hr_params
+                )
+                fs = sig.fs
+                # Slice by time window
+                mask = (sig.time >= start_sec) & (sig.time < end_sec)
+                t = sig.time[mask]
+                chunk_data = sig.data[mask]
+                if chunk_data.size == 0:
+                    continue
+            else:
+                # Other channels come from the chunk loader
+                chunk_data = data_dict.get(ch, np.array([]))
+                if chunk_data.size == 0:
+                    continue
+                sig = self.data_manager.get_trace(self.file_path, ch)
+                fs = sig.fs
+                # Build time axis for the raw chunk
+                t = np.arange(len(chunk_data)) / fs + start_sec
 
             # Downsample if too many points
             max_pts = 5000
@@ -238,22 +266,20 @@ class TiltTab(QWidget):
                 t = t[::step]
                 chunk_data = chunk_data[::step]
 
-            # Update or create curve
+            # Update existing curve or create a new one
             if ch in self.plot_curves:
                 self.plot_curves[ch].setData(t, chunk_data)
             else:
+                # plot with a yellow pen of width 1
                 self.plot_curves[ch] = plot_item.plot(
                     t, chunk_data, pen=pg.mkPen("y", width=1)
                 )
 
-            # Set ranges
+            # Adjust X and Y ranges
             plot_item.setXRange(start_sec, end_sec, padding=0)
-            if chunk_data.size > 0:
-                finite_data = chunk_data[np.isfinite(chunk_data)]
-                if finite_data.size > 0:
-                    plot_item.setYRange(
-                        float(finite_data.min()), float(finite_data.max())
-                    )
+            finite = chunk_data[np.isfinite(chunk_data)]
+            if finite.size:
+                plot_item.setYRange(float(finite.min()), float(finite.max()))
 
     def _setup_plots(self):
         """Setup plot structure efficiently."""

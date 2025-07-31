@@ -17,3 +17,6 @@ build
 
 # Cache
 __pycache__/
+
+#Log info
+logs/

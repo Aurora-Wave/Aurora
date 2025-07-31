@@ -59,7 +59,7 @@ class AditchLoader(BaseLoader):
 
         # HR
         if upper == "HR_GEN" and "ECG" in self.metadata['channels']:
-            self.logger.info("Triying to generated HR")
+            self.logger.info(f"Triying to generated HR with {kwargs} ")
             # Derive HR from ECG, using kwargs if provided
             raw_sig = self.get_full_trace('ECG', gap_length)
             # Defaults for HR_gen parameters
@@ -81,7 +81,10 @@ class AditchLoader(BaseLoader):
                 min_rr_sec=min_rr_sec
             )
             hr_sig.MarkerData = raw_sig.MarkerData
-            self.metadata.get('channels').append("HR_gen")
+            
+            if channel not in self.metadata.get('channels'):
+                self.metadata.get('channels').append("HR_gen")
+
             self.logger.debug((f" canales actuales {self.metadata.get('channels')}"))
 
             return hr_sig

@@ -263,13 +263,17 @@ class MainWindow(QMainWindow):
         self.tab_widget.insertTab(idx, viewer, os.path.basename(path))
         self.tab_widget.setCurrentIndex(idx)
 
-        # Update Tilt and Analysis
-        self.tilt_tab.update_tilt_tab(self.data_manager, path)
+        # First update AnalysisTab so its hr_params are up-to-date
         self.analysis_tab.update_analysis_tab(self.data_manager, path)
+        # Then pass those hr_params into TiltTab
+        self.tilt_tab.update_tilt_tab(self.data_manager, path, hr_params)
 
     def _export_csv(self):
         """Export selected signal statistics to CSV."""
         return error_handler.safe_execute(self._export_csv_impl, "Exportar CSV")
+
+
+    # FIXME Sacar esta logica y moverla a processing
 
     def _export_csv_impl(self):
         """Implementación protegida de exportación CSV."""
