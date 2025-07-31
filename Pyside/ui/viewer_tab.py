@@ -1,12 +1,19 @@
 import numpy as np
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QScrollBar, QHBoxLayout, QLabel,
-    QSpinBox, QScrollArea
+    QWidget,
+    QVBoxLayout,
+    QScrollBar,
+    QHBoxLayout,
+    QLabel,
+    QSpinBox,
+    QScrollArea,
 )
 from PySide6.QtCore import Qt
 import pyqtgraph as pg
 from ui.widgets.selectable_viewbox import SelectableViewBox
 from processing.chunk_loader import ChunkLoader
+from core.channel_units import get_channel_label_with_unit
+
 
 class ViewerTab(QWidget):
     def __init__(self, main_window):
@@ -19,6 +26,7 @@ class ViewerTab(QWidget):
         self.file_path = None
         self.chunk_size = 60
         self.hr_params = {}
+        self.comment_markers = {}  # Track comment markers per plot for cleanup
 
         # Layouts
         self.controls_layout = QHBoxLayout()
@@ -64,20 +72,26 @@ class ViewerTab(QWidget):
         self.clear_plots()
         self.plots = []
         self._regions = []
+        self.comment_markers = {}  # Reset comment markers dictionary
         for i, signal_name in enumerate(target_signals):
             vb = SelectableViewBox(self, i)
             plot = pg.PlotWidget(viewBox=vb)
             plot.setMinimumHeight(200)
             plot.setLabel("bottom", "Time (s)")
-            plot.setLabel("left", signal_name)
+            plot.setLabel("left", get_channel_label_with_unit(signal_name))
             plot.setMouseEnabled(x=False, y=False)
             curve = plot.plot([], [], pen="y")
             plot.curve = curve
             self.scroll_layout.addWidget(plot)
             self.plots.append(plot)
             self._regions.append(None)
+            # Initialize empty marker list for this plot
+            self.comment_markers[plot] = []
 
     def clear_plots(self):
+        # Clear comment markers first
+        self._clear_comment_markers()
+
         while self.scroll_layout.count():
             item = self.scroll_layout.takeAt(0)
             widget = item.widget()
@@ -108,9 +122,11 @@ class ViewerTab(QWidget):
         # Horizontal scrollbar for navigation
         self.scrollbar = QScrollBar()
         self.scrollbar.setOrientation(Qt.Horizontal)
-        self.scrollbar.setMinimumHeight(35)
-        self.scrollbar.setMaximumHeight(35)
-        self.scrollbar.setStyleSheet("QScrollBar {height: 35px;}")
+        self.scrollbar.setMinimumHeight(20)  # Reducir de 35 a 20px
+        self.scrollbar.setMaximumHeight(20)  # Reducir de 35 a 20px
+        self.scrollbar.setStyleSheet(
+            "QScrollBar {height: 20px;}"
+        )  # Reducir de 35 a 20px
         dm = self.main_window.data_manager
         durations = []
         for ch in self.target_signals:
@@ -125,6 +141,9 @@ class ViewerTab(QWidget):
         self.scrollbar.valueChanged.connect(self.request_chunk)
         self.controls_layout.addWidget(self.scrollbar)
 
+        # Add comment markers after setting up scrollbar
+        self._add_comment_markers()
+
     def _setup_chunk_loader(self):
         self.chunk_loader = ChunkLoader()
         self.chunk_loader.chunk_loaded.connect(self.update_chunk)
@@ -138,7 +157,7 @@ class ViewerTab(QWidget):
             file_path=self.file_path,
             channel_names=self.target_signals,
             start_sec=start,
-            duration_sec=self.chunk_size
+            duration_sec=self.chunk_size,
         )
 
     def update_chunk(self, start, end, data_dict):
@@ -158,7 +177,9 @@ class ViewerTab(QWidget):
             if np.abs(y).max() > 1e6:
                 y = np.clip(y, -1e6, 1e6)
             if len(y) < expected_len:
-                y = np.concatenate([y, np.full(expected_len - len(y), np.nan, dtype=np.float32)])
+                y = np.concatenate(
+                    [y, np.full(expected_len - len(y), np.nan, dtype=np.float32)]
+                )
             t = np.arange(expected_len) / fs + start
             max_points = 5000
             if len(y) > max_points:
@@ -168,9 +189,116 @@ class ViewerTab(QWidget):
             p.curve.setData(t, y)
             p.setXRange(start, end, padding=0)
             y_min, y_max = self.y_ranges.get(signal_name, (0, 1))
-            if not np.isfinite(y_min) or not np.isfinite(y_max) or abs(y_max - y_min) > 1e6:
+            if (
+                not np.isfinite(y_min)
+                or not np.isfinite(y_max)
+                or abs(y_max - y_min) > 1e6
+            ):
                 y_min, y_max = 0, 1
             p.setYRange(y_min, y_max)
+
+        # Add comment markers after updating all plots
+        self._add_comment_markers()
+
+    def _clear_comment_markers(self):
+        """Clear all existing comment markers from plots."""
+        for plot, markers in self.comment_markers.items():
+            for marker in markers:
+                try:
+                    plot.removeItem(marker)
+                except (ValueError, RuntimeError):
+                    # Marker may already be deleted
+                    pass
+        self.comment_markers.clear()
+
+    def _add_comment_markers(self):
+        """Add vertical lines at comment timestamps with event names."""
+        try:
+            # Clear previous markers first
+            self._clear_comment_markers()
+
+            # Get data manager and extract intervals
+            dm = self.main_window.data_manager
+            if not dm or not self.file_path:
+                return
+
+            # Get ECG trace to extract comments
+            ecg = dm.get_trace(self.file_path, "ECG")
+            from processing.interval_extractor import extract_event_intervals
+
+            intervals = extract_event_intervals([ecg])
+
+            # Extract all comment timestamps with their names
+            comment_data = []
+            for iv in intervals:
+                event_name = iv.get("evento", "Event")
+
+                if iv.get("t_evento"):
+                    comment_data.append((iv.get("t_evento"), f"{event_name} Start"))
+                if iv.get("t_recovery"):
+                    comment_data.append(
+                        (iv.get("t_recovery"), f"{event_name} Recovery")
+                    )
+                if iv.get("t_tilt_down"):
+                    comment_data.append((iv.get("t_tilt_down"), f"{event_name} End"))
+                if iv.get("t_baseline"):
+                    comment_data.append(
+                        (iv.get("t_baseline"), f"{event_name} Baseline")
+                    )
+
+            # Remove duplicates by timestamp
+            comment_dict = {}
+            for timestamp, label in comment_data:
+                if timestamp is not None:
+                    if timestamp not in comment_dict:
+                        comment_dict[timestamp] = []
+                    comment_dict[timestamp].append(label)
+
+            # Get current time range
+            current_start = self.scrollbar.value()
+            current_end = current_start + self.chunk_size
+
+            print(
+                f"[ViewerTab] Current range: {current_start}-{current_end}, Found {len(comment_dict)} comment timestamps"
+            )
+            for ts, labels in comment_dict.items():
+                print(f"  Timestamp {ts}: {labels}")
+
+            # Add vertical lines to all plots
+            markers_added = 0
+            for plot in self.plots:
+                for timestamp, labels in comment_dict.items():
+                    if current_start <= timestamp <= current_end:
+                        # Create vertical line
+                        line = pg.InfiniteLine(
+                            pos=timestamp,
+                            angle=90,
+                            pen=pg.mkPen(
+                                "#ff9500", width=1, style=pg.QtCore.Qt.DashLine
+                            ),
+                            label=" | ".join(labels),  # Combine multiple labels
+                            labelOpts={
+                                "position": 0.95,
+                                "color": "#ff9500",
+                                "fill": (255, 149, 0, 50),
+                            },
+                        )
+                        line.setZValue(1)  # Behind data but visible
+                        plot.addItem(line)
+                        # Track the marker for cleanup
+                        if plot not in self.comment_markers:
+                            self.comment_markers[plot] = []
+                        self.comment_markers[plot].append(line)
+                        markers_added += 1
+
+            print(
+                f"[ViewerTab] Added {markers_added} markers across {len(self.plots)} plots"
+            )
+
+        except Exception as e:
+            print(f"[ViewerTab] Error adding comment markers: {e}")
+            # Silent fail - comment markers are optional
+            pass
 
     def on_chunk_size_changed(self, value):
         self.chunk_size = value
@@ -182,3 +310,5 @@ class ViewerTab(QWidget):
         min_duration = int(min(durations)) if durations else 1
         self.scrollbar.setMaximum(max(0, min_duration - self.chunk_size))
         self.request_chunk(self.scrollbar.value())
+        # Refresh markers after chunk size change
+        self._add_comment_markers()

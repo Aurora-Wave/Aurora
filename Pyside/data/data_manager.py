@@ -8,6 +8,7 @@ from .aditch_loader import AditchLoader
 
 MAX_HR_CACHE = 5  # Maximum HR_gen configurations to cache
 
+
 class DataManager:
     def __init__(self):
         self._files = {}
@@ -35,8 +36,8 @@ class DataManager:
             "signal_cache": {},
             "metadata": loader.get_metadata(),
             "comments": loader.get_all_comments(),
-            "hr_cache": {},                       # dict: key (config tuple) -> Signal
-            "hr_cache_keys": deque(maxlen=MAX_HR_CACHE)  # order of keys for eviction
+            "hr_cache": {},  # dict: key (config tuple) -> Signal
+            "hr_cache_keys": deque(maxlen=MAX_HR_CACHE),  # order of keys for eviction
         }
         # If the file already has HR_gen, cache it as canonical
         if "HR_gen" in self._files[path]["metadata"].get("channels", []):
@@ -76,7 +77,9 @@ class DataManager:
                 # Ensure HR_gen is in metadata
                 if "HR_gen" not in entry["metadata"]["channels"]:
                     entry["metadata"]["channels"].append("HR_gen")
-                self.logger.info(f"HR_gen added to metadata from {path} file [default config]")
+                self.logger.info(
+                    f"HR_gen added to metadata from {path} file [default config]"
+                )
 
             return sig
 
@@ -137,9 +140,9 @@ class DataManager:
         """
         base_channels = self._files[path]["metadata"].get("channels", [])
 
-        # Agregar canales computados disponibles
+        # Agregar canales computados disponibles (evitando duplicados)
         computed_channels = []
-        if "ECG" in base_channels:
+        if "ECG" in base_channels and "HR_gen" not in base_channels:
             computed_channels.append("HR_gen")
 
         return base_channels + computed_channels

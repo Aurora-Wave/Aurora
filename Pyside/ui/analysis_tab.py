@@ -14,6 +14,8 @@ import pyqtgraph as pg
 from processing.chunk_loader import ChunkLoader
 from PySide6.QtCore import Qt
 import logging
+from core.channel_units import get_channel_label_with_unit
+
 
 def sanitize_for_plot(y, clip=1e6):
     """Sanitize y-array for plotting: removes inf, nan, and extreme values."""
@@ -23,6 +25,7 @@ def sanitize_for_plot(y, clip=1e6):
     if np.abs(y).max() > clip:
         y = np.clip(y, -clip, clip)
     return y
+
 
 class AnalysisTab(QWidget):
     """
@@ -49,6 +52,9 @@ class AnalysisTab(QWidget):
         # Dragging state
         self._dragged_peak_idx = None
         self._is_dragging = False
+
+        # Comment markers tracking
+        self.comment_markers = []
 
         # Layout
         main = QVBoxLayout(self)
@@ -101,8 +107,8 @@ class AnalysisTab(QWidget):
 
         self.plots = pg.GraphicsLayoutWidget()
         self.ecg_plot = self.plots.addPlot(row=0, col=0, title="ECG Chunk")
-        self.hr_plot  = self.plots.addPlot(row=1, col=0, title="HR_gen Chunk")
-        self.wave_plot= self.plots.addPlot(row=2, col=0, title="Wavelet")
+        self.hr_plot = self.plots.addPlot(row=1, col=0, title="HR_gen Chunk")
+        self.wave_plot = self.plots.addPlot(row=2, col=0, title="Wavelet")
 
         for p in (self.ecg_plot, self.hr_plot, self.wave_plot):
             p.showGrid(x=True, y=True)
@@ -111,9 +117,9 @@ class AnalysisTab(QWidget):
         self.ecg_plot.getViewBox().setMenuEnabled(False)
 
         self.ecg_plot.setLabel("bottom", "Time (s)")
-        self.ecg_plot.setLabel("left", "Amplitude")
+        self.ecg_plot.setLabel("left", get_channel_label_with_unit("ECG"))
         self.hr_plot.setLabel("bottom", "Time (s)")
-        self.hr_plot.setLabel("left", "BPM")
+        self.hr_plot.setLabel("left", get_channel_label_with_unit("HR_gen"))
         self.hr_plot.setXLink(self.ecg_plot)
         self.wave_plot.setLabel("bottom", "Units")
         self.wave_plot.setLabel("left", "Amplitude")
@@ -146,6 +152,9 @@ class AnalysisTab(QWidget):
         self.chunk_sb.setValue(min(self.chunk_size, int(self.duration)))
         self.start_sb.setRange(0, int(self.duration - self.chunk_sb.value()))
 
+        # Extract and add comment markers
+        self._add_comment_markers()
+
         self._update()
 
     def _on_chunk_changed(self, val):
@@ -169,17 +178,14 @@ class AnalysisTab(QWidget):
 
         # ECG chunk
         ecg_chunk = ChunkLoader.get_chunk(
-            self.data_manager, self.file_path, ["ECG"], start, chunk)
+            self.data_manager, self.file_path, ["ECG"], start, chunk
+        )
         t_ecg = np.arange(len(ecg_chunk)) / self.fs + start
         y_ecg = sanitize_for_plot(ecg_chunk)
 
         # HR_gen global (full signal)
         hr_sig = self.data_manager.get_trace(
-            self.file_path,
-            "HR_GEN",
-            wavelet=wav,
-            swt_level=lvl,
-            min_rr_sec=md
+            self.file_path, "HR_GEN", wavelet=wav, swt_level=lvl, min_rr_sec=md
         )
         hr_t = hr_sig.time
         hr_v = hr_sig.data
@@ -201,7 +207,7 @@ class AnalysisTab(QWidget):
 
         # Plot ECG with peaks
         self.ecg_plot.clear()
-        self.ecg_plot.plot(t_ecg, y_ecg, pen='b')
+        self.ecg_plot.plot(t_ecg, y_ecg, pen="b")
 
         # Get HR values at each peak in the current chunk
         hr_peaks = hr_sig.data[peaks_in_chunk.astype(int)]
@@ -214,9 +220,9 @@ class AnalysisTab(QWidget):
                 t_peaks[valid_mask],
                 y_peaks[valid_mask],
                 pen=None,
-                symbol='o',
-                symbolBrush='r',
-                symbolSize=10
+                symbol="o",
+                symbolBrush="r",
+                symbolSize=10,
             )
         # Plot NaN peaks (HR NaN or inf): GREEN
         if np.any(nan_mask):
@@ -224,9 +230,9 @@ class AnalysisTab(QWidget):
                 t_peaks[nan_mask],
                 y_peaks[nan_mask],
                 pen=None,
-                symbol='o',
-                symbolBrush='g',
-                symbolSize=10
+                symbol="o",
+                symbolBrush="g",
+                symbolSize=10,
             )
 
         self._last_chunk_start = start
@@ -241,7 +247,7 @@ class AnalysisTab(QWidget):
             hr_max = np.nanmax(hr_v_chunk) + 10
             if not np.isfinite(hr_min) or not np.isfinite(hr_max) or hr_min == hr_max:
                 hr_min, hr_max = 20, 200  # fallback for physiological HR
-            self.hr_plot.plot(hr_t_chunk, y_hr, pen='g')
+            self.hr_plot.plot(hr_t_chunk, y_hr, pen="g")
             self.hr_plot.setYRange(hr_min, hr_max)
         else:
             self.hr_plot.setYRange(20, 200)
@@ -253,7 +259,10 @@ class AnalysisTab(QWidget):
             psi, x = pywt.Wavelet(wav).wavefun()[:2]
         psi = sanitize_for_plot(psi)
         self.wave_plot.clear()
-        self.wave_plot.plot(x, psi, pen='m')
+        self.wave_plot.plot(x, psi, pen="m")
+
+        # Update comment markers for current chunk
+        self._add_comment_markers()
 
     # Mouse interaction: click-inicio y click-destino
     def _on_ecg_click(self, event):
@@ -263,8 +272,10 @@ class AnalysisTab(QWidget):
         t_click = mouse_point.x()
         fs = self.fs
         global_idx = int(t_click * fs)
-        
-        self.logger.debug(f"Clicked at {t_click:.2f}s (index={global_idx}), drag mode={self._is_dragging}")
+
+        self.logger.debug(
+            f"Clicked at {t_click:.2f}s (index={global_idx}), drag mode={self._is_dragging}"
+        )
 
         hr_sig = self.data_manager.get_trace(
             self.file_path,
@@ -292,10 +303,11 @@ class AnalysisTab(QWidget):
                 self._is_dragging = False
                 self._update()
                 self.data_manager.update_hr_cache(
-                    self.file_path, hr_sig,
+                    self.file_path,
+                    hr_sig,
                     wavelet=self.wavelet_cb.currentText(),
                     swt_level=self.level_sb.value(),
-                    min_rr_sec=self.dist_sb.value()
+                    min_rr_sec=self.dist_sb.value(),
                 )
                 self.logger.debug("Updated HR_GEN cache after moving peak.")
 
@@ -330,10 +342,12 @@ class AnalysisTab(QWidget):
             raw_ecg = self.data_manager.get_trace(self.file_path, "ECG").data
             search_start = max(global_idx - window, 0)
             search_end = min(global_idx + window, len(raw_ecg))
-            local_max_idx = np.argmax(np.abs(raw_ecg[search_start:search_end])) + search_start
-            
+            local_max_idx = (
+                np.argmax(np.abs(raw_ecg[search_start:search_end])) + search_start
+            )
+
             self.logger.info(f"Adding new R-peak at index: {local_max_idx}")
-            
+
             hr_sig.r_peaks = np.sort(np.append(hr_sig.r_peaks, local_max_idx))
             # Update only the segments around the new peak
             i = np.searchsorted(hr_sig.r_peaks, local_max_idx)
@@ -344,13 +358,13 @@ class AnalysisTab(QWidget):
             hr_sig._data = hr_sig._data.copy()
             self._update()
             self.data_manager.update_hr_cache(
-                self.file_path, 
+                self.file_path,
                 hr_sig,
                 wavelet=self.wavelet_cb.currentText(),
                 swt_level=self.level_sb.value(),
-                min_rr_sec=self.dist_sb.value())
+                min_rr_sec=self.dist_sb.value(),
+            )
         self.logger.debug("Updated HR_GEN cache after adding peak.")
-
 
     def _handle_delete_peak(self, event):
         pos = event.scenePos()
@@ -382,10 +396,11 @@ class AnalysisTab(QWidget):
             hr_sig._data = hr_sig._data.copy()
             self._update()
             self.data_manager.update_hr_cache(
-                self.file_path, hr_sig,
+                self.file_path,
+                hr_sig,
                 wavelet=self.wavelet_cb.currentText(),
                 swt_level=self.level_sb.value(),
-                min_rr_sec=self.dist_sb.value()
+                min_rr_sec=self.dist_sb.value(),
             )
             self.logger.debug("Updated HR_GEN cache after deleting peak.")
 
@@ -393,5 +408,85 @@ class AnalysisTab(QWidget):
         return {
             "wavelet": self.wavelet_cb.currentText(),
             "swt_level": self.level_sb.value(),
-            "min_rr_sec": self.dist_sb.value()
+            "min_rr_sec": self.dist_sb.value(),
         }
+
+    def _clear_comment_markers(self):
+        """Clear all existing comment markers from plots."""
+        for marker in self.comment_markers:
+            try:
+                # Remove marker from its parent plot
+                if marker.parentItem():
+                    marker.parentItem().removeItem(marker)
+            except RuntimeError:
+                # Marker may already be deleted
+                pass
+        self.comment_markers.clear()
+
+    def _add_comment_markers(self):
+        """Add vertical lines at comment timestamps with event names."""
+        try:
+            # Clear previous markers first
+            self._clear_comment_markers()
+
+            # Get ECG trace to extract comments
+            ecg = self.data_manager.get_trace(self.file_path, "ECG")
+            from processing.interval_extractor import extract_event_intervals
+
+            intervals = extract_event_intervals([ecg])
+
+            # Extract all comment timestamps with their names
+            comment_data = []
+            for iv in intervals:
+                event_name = iv.get("evento", "Event")
+
+                if iv.get("t_evento"):
+                    comment_data.append((iv.get("t_evento"), f"{event_name} Start"))
+                if iv.get("t_recovery"):
+                    comment_data.append(
+                        (iv.get("t_recovery"), f"{event_name} Recovery")
+                    )
+                if iv.get("t_tilt_down"):
+                    comment_data.append((iv.get("t_tilt_down"), f"{event_name} End"))
+                if iv.get("t_baseline"):
+                    comment_data.append(
+                        (iv.get("t_baseline"), f"{event_name} Baseline")
+                    )
+
+            # Remove duplicates by timestamp
+            comment_dict = {}
+            for timestamp, label in comment_data:
+                if timestamp is not None:
+                    if timestamp not in comment_dict:
+                        comment_dict[timestamp] = []
+                    comment_dict[timestamp].append(label)
+
+            # Get current chunk range
+            start_time = self.start_sb.value()
+            end_time = start_time + self.chunk_sb.value()
+
+            # Add vertical lines to ECG and HR plots (not wavelet as it's different scale)
+            for plot in [self.ecg_plot, self.hr_plot]:
+                for timestamp, labels in comment_dict.items():
+                    if start_time <= timestamp <= end_time:
+                        # Create vertical line with label
+                        line = pg.InfiniteLine(
+                            pos=timestamp,
+                            angle=90,
+                            pen=pg.mkPen(
+                                "#ff9500", width=2, style=pg.QtCore.Qt.DashLine
+                            ),
+                            label=" | ".join(labels),  # Combine multiple labels
+                            labelOpts={
+                                "position": 0.95,
+                                "color": "#ff9500",
+                                "fill": (255, 149, 0, 50),
+                            },
+                        )
+                        line.setZValue(1)  # Behind data but visible
+                        plot.addItem(line)
+                        # Track the marker for cleanup
+                        self.comment_markers.append(line)
+
+        except Exception as e:
+            self.logger.warning(f"Could not add comment markers: {e}")

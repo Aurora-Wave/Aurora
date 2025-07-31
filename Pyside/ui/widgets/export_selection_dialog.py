@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QAbstractItemView,
     QGroupBox,
+    QSpinBox,
+    QFormLayout,
 )
 from PySide6.QtCore import Qt
 
@@ -62,9 +64,25 @@ class ExportSelectionDialog(QDialog):
         test_group.setLayout(test_layout)
         layout.addWidget(test_group)
 
+        # Configuración de segmentación temporal
+        config_group = QGroupBox("Time Segmentation Configuration")
+        config_layout = QFormLayout()
+
+        self.segment_spin = QSpinBox()
+        self.segment_spin.setRange(10, 300)  # Entre 10 segundos y 5 minutos
+        self.segment_spin.setValue(60)  # Default: 60 segundos (1 minuto)
+        self.segment_spin.setSuffix(" seconds")
+        self.segment_spin.setToolTip(
+            "Duration of each time segment for statistics calculation"
+        )
+
+        config_layout.addRow("Segment duration:", self.segment_spin)
+        config_group.setLayout(config_layout)
+        layout.addWidget(config_group)
+
         # Info adicional
         info_label = QLabel(
-            "📊 Export format: Statistics per minute (mean & max values)\n"
+            "📊 Export format: Statistics per time segment (mean & max values)\n"
             "📁 Output: CSV file with semicolon separator\n"
             "💡 HR_gen: Computed heart rate signal available\n"
             "⏱️ Multiple tests: Distinguished by start time"
@@ -87,4 +105,5 @@ class ExportSelectionDialog(QDialog):
     def get_selections(self):
         signals = [item.text() for item in self.signal_list.selectedItems()]
         tests = [item.text() for item in self.test_list.selectedItems()]
-        return signals, tests
+        segment_duration = float(self.segment_spin.value())
+        return signals, tests, segment_duration

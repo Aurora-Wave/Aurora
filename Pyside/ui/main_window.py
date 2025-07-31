@@ -23,6 +23,7 @@ from ui.widgets.channel_selection_dialog import ChannelSelectionDialog
 from ui.widgets.export_selection_dialog import ExportSelectionDialog
 from ui.utils.error_handler import error_handler
 from processing.interval_extractor import extract_event_intervals
+from processing.csv_exporter import CSVExporter
 
 # Configure logging for debugging
 logging.basicConfig(level=logging.DEBUG)
@@ -256,8 +257,8 @@ class MainWindow(QMainWindow):
             file_path=path,
             chunk_size=60,
             target_signals=selected_channels,
-            hr_params=hr_params
-            )
+            hr_params=hr_params,
+        )
         # FIXME Intento de poder abrir distintos archivos, cada archivo deberia tener su propio grupo de tabs
         idx = self.tab_widget.count() - 2
         self.tab_widget.insertTab(idx, viewer, os.path.basename(path))
@@ -272,9 +273,6 @@ class MainWindow(QMainWindow):
         """Export selected signal statistics to CSV."""
         return error_handler.safe_execute(self._export_csv_impl, "Exportar CSV")
 
-
-    # FIXME Sacar esta logica y moverla a processing
-
     def _export_csv_impl(self):
         """Implementación protegida de exportación CSV."""
         if not self.current_file:
@@ -284,42 +282,21 @@ class MainWindow(QMainWindow):
         path = self.current_file
         all_signals = self.data_manager.get_available_channels(path)
 
-        # Extraer intervalos de eventos sin cargar todas las señales
-        try:
-            # Solo cargamos ECG para extraer comentarios (es más liviano que cargar todo)
-            ecg_trace = self.data_manager.get_trace(path, "ECG")
-            intervals = extract_event_intervals([ecg_trace])
+        # Crear exporter y extraer tests
+        exporter = CSVExporter(self.data_manager)
+        test_entries = exporter.extract_test_entries(path)
+        unique_tests = [entry[0] for entry in test_entries]
 
-            # Extraer tests con información de tiempo para distinguir duplicados
-            test_entries = []
-            for iv in intervals:
-                evento = iv.get("evento")
-                if evento:
-                    # Crear identificador único con tiempo de inicio
-                    t_start = iv.get("t_evento") or iv.get("t_tilt_angle", 0)
-                    # Formatear tiempo en minutos:segundos para mejor legibilidad
-                    tiempo_str = f"{int(t_start//60):02d}:{int(t_start%60):02d}"
-                    display_name = f"{evento} (at {tiempo_str})"
-                    test_entries.append((display_name, iv))
-
-            # Ordenar por tiempo de inicio
-            test_entries.sort(
-                key=lambda x: x[1].get("t_evento", 0) or x[1].get("t_tilt_angle", 0)
-            )
-            unique_tests = [entry[0] for entry in test_entries]
-
-        except Exception as e:
-            self.logger.warning(f"Could not extract events: {str(e)}")
-            QMessageBox.warning(self, "Export", f"Could not extract events: {str(e)}")
-            unique_tests = []
-            test_entries = []
+        if not unique_tests:
+            QMessageBox.warning(self, "Export", "No test events found in file.")
+            return
 
         # Mostrar diálogo de selección
         dialog = ExportSelectionDialog(all_signals, unique_tests, self)
         if not dialog.exec():
             return
 
-        sel_signals, sel_tests = dialog.get_selections()
+        sel_signals, sel_tests, segment_duration = dialog.get_selections()
         if not sel_signals:
             QMessageBox.warning(self, "Export", "No signals selected.")
             return
@@ -331,152 +308,17 @@ class MainWindow(QMainWindow):
         if not save_path:
             return
 
-        # Preparar intervalos de exportación
-        export_ints = []
-        if sel_tests and test_entries:
-            # Crear mapeo de nombres de display a intervalos
-            test_map = {entry[0]: entry[1] for entry in test_entries}
-
-            for test_name in sel_tests:
-                if test_name in test_map:
-                    iv = test_map[test_name]
-                    # Obtener tiempos de inicio y fin según el tipo de test
-                    if iv.get("tipo") == "tilt_angle":
-                        s = iv.get("t_evento") or iv.get("t_tilt_angle")
-                        e = iv.get("t_tilt_down")
-                    else:  # tipo "coms"
-                        s = iv.get("t_evento")
-                        e = iv.get("t_recovery")
-
-                    if s is not None and e is not None:
-                        # Usar el nombre original del evento, no el display name
-                        original_name = iv.get("evento", test_name.split(" (at ")[0])
-                        export_ints.append((original_name, s, e))
-        else:
-            # Si no hay tests seleccionados, exportar señal completa
-            export_ints.append(("Full_Signal", 0, None))
-
-        if not export_ints:
-            # Agregar información de debugging
-            self.logger.warning(
-                f"No export intervals found. Selected tests: {sel_tests}"
-            )
-            self.logger.warning(
-                f"Available test entries: {[entry[0] for entry in test_entries]}"
-            )
-            QMessageBox.warning(
-                self,
-                "Export",
-                f"No valid intervals found.\n\n"
-                f"Selected tests: {len(sel_tests)}\n"
-                f"Available tests: {len(test_entries)}",
-            )
-            return
-
-        # Exportar datos
+        # Exportar usando el módulo dedicado
         try:
-            headers = []
-            rows = []
-
-            for test_name, s, e in export_ints:
-                row = []  # No incluir nombre del test como primera columna
-                if not headers:  # Solo definir headers una vez
-                    headers = []  # No incluir "Test_Instance"
-
-                # Calcular estadísticas por minuto
-                if e is not None and s is not None:
-                    duration = e - s
-                    minutes = (
-                        int(duration / 60) + 1
-                    )  # Número de minutos completos o parciales
-
-                    # Agregar headers para cada minuto si es la primera iteración
-                    if len(headers) == 0:  # Si headers está vacío
-                        for min_idx in range(minutes):
-                            for ch in sel_signals:
-                                headers.extend(
-                                    [
-                                        f"{ch}_mean_min{min_idx+1}",
-                                        f"{ch}_max_min{min_idx+1}",
-                                    ]
-                                )
-
-                    # Calcular estadísticas por minuto
-                    for min_idx in range(minutes):
-                        min_start = s + (min_idx * 60)
-                        min_end = min(s + ((min_idx + 1) * 60), e)
-
-                        for ch in sel_signals:
-                            try:
-                                # Manejar HR_gen con parámetros por defecto
-                                if ch.upper() == "HR_GEN":
-                                    sig = self.data_manager.get_trace(
-                                        path, ch, wavelet="haar", level=4, min_dist=0.5
-                                    )
-                                else:
-                                    sig = self.data_manager.get_trace(path, ch)
-
-                                data = sig.data  # Usar .data directamente
-                                fs = sig.fs
-                                i0 = int(min_start * fs)
-                                i1 = int(min_end * fs)
-                                seg = data[i0:i1] if i1 <= len(data) else data[i0:]
-
-                                if seg.size > 0:
-                                    row.extend(
-                                        [
-                                            f"{float(seg.mean()):.6f}",
-                                            f"{float(seg.max()):.6f}",
-                                        ]
-                                    )
-                                else:
-                                    row.extend(["", ""])
-                            except Exception as ex:
-                                self.logger.warning(f"Error processing {ch}: {ex}")
-                                row.extend(["ERROR", "ERROR"])
-                else:
-                    # Si no hay duración definida, usar señal completa
-                    if len(headers) == 0:  # Si headers está vacío
-                        for ch in sel_signals:
-                            headers.extend([f"{ch}_mean_full", f"{ch}_max_full"])
-
-                    for ch in sel_signals:
-                        try:
-                            # Manejar HR_gen con parámetros por defecto
-                            if ch.upper() == "HR_GEN":
-                                sig = self.data_manager.get_trace(
-                                    path, ch, wavelet="haar", level=4, min_dist=0.5
-                                )
-                            else:
-                                sig = self.data_manager.get_trace(path, ch)
-
-                            data = sig.data
-                            if data.size > 0:
-                                row.extend(
-                                    [
-                                        f"{float(data.mean()):.6f}",
-                                        f"{float(data.max()):.6f}",
-                                    ]
-                                )
-                            else:
-                                row.extend(["", ""])
-                        except Exception as ex:
-                            self.logger.warning(f"Error processing {ch}: {ex}")
-                            row.extend(["ERROR", "ERROR"])
-
-                rows.append(row)
-
-            # Escribir archivo CSV
-            with open(save_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f, delimiter=";")
-                writer.writerow(headers)
-                writer.writerows(rows)
+            exporter.export_to_csv(
+                path, sel_signals, sel_tests, test_entries, save_path, segment_duration
+            )
 
             QMessageBox.information(
                 self,
                 "Export Success",
                 f"CSV exported successfully to:\n{save_path}\n\n"
-                f"📊 {len(rows)} test instance(s) exported\n"
+                f"📊 {len(sel_tests) if sel_tests else 1} test instance(s) exported\n"
                 f"📈 {len(sel_signals)} signal(s) included",
             )
 
