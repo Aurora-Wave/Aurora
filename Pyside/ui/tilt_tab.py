@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 import pyqtgraph as pg
 from data.data_manager import DataManager
-from core.interval_extractor import extract_event_intervals
+from processing.interval_extractor import extract_event_intervals
 
 class TiltTab(QWidget):
     """

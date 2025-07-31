@@ -4,10 +4,7 @@ import os
 import csv
 import logging
 import numpy as np
-from PySide6.QtWidgets import (
-    QMainWindow, QFileDialog, QMessageBox,
-    QTabWidget, QToolBar)
-
+from PySide6.QtWidgets import (QMainWindow, QFileDialog, QMessageBox,QTabWidget, QToolBar)
 from PySide6.QtGui import QAction
 from data.data_manager import DataManager
 from ui.viewer_tab import ViewerTab
@@ -15,17 +12,18 @@ from ui.analysis_tab import AnalysisTab
 from ui.tilt_tab import TiltTab
 from ui.widgets.channel_selection_dialog import ChannelSelectionDialog
 from ui.widgets.export_selection_dialog import ExportSelectionDialog
-from core.interval_extractor import extract_event_intervals
+from processing.interval_extractor import extract_event_intervals
 
 # Configure logging for debugging
 logging.basicConfig(level=logging.DEBUG)
-CONFIG_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "config", "signals_config.json")
-)
+
+
+# Signals configuration path
+CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "signals_config.json"))
 
 class MainWindow(QMainWindow):
     """
-    Main window for AuroraWave with enhanced debug logging
+    Main window for AuroraWave
     """
     def __init__(self):
         super().__init__()
@@ -34,7 +32,7 @@ class MainWindow(QMainWindow):
 
         # Setup logger
         self.logger = logging.getLogger(__name__)
-        self.logger.debug(f"CONFIG_PATH: {CONFIG_PATH}")
+        self.logger.debug(f"USER SIGNALS PREFERENCE CONFIG_PATH: {CONFIG_PATH}")
 
         # Data manager and current file
         self.data_manager = DataManager()
@@ -62,31 +60,32 @@ class MainWindow(QMainWindow):
         # Attempt to load last session config
         self._load_config_if_exists()
 
-
-
-
     # Menubar definition
     def _init_menubar(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("Files")
         export_menu = menu_bar.addMenu("Export")
-        export_menu.addAction("Exportar marcadores", self.export_marke)
-
+        #FIXME Conectar widget de exportacion
+        #export_menu.addAction("Exportar marcadores", self.export_markers)
 
     # Toolbar definition
     def _init_toolbar(self):
         toolbar = QToolBar("Main Toolbar", self)
         self.addToolBar(toolbar)
+        # Load file action
         load_act = QAction("Load File", self)
         load_act.triggered.connect(self._load_file_dialog)
         toolbar.addAction(load_act)
+
         export_act = QAction("Export CSV", self)
         export_act.triggered.connect(self._export_csv)
         toolbar.addAction(export_act)
 
+
+    # Preference config
     def _load_config_if_exists(self):
         """Attempt to load configuration and apply default file and signals."""
-        self.logger.debug("Attempting to load configuration file...")
+        self.logger.info("Attempting to load configuration file...")
         if not os.path.exists(CONFIG_PATH):
             self.logger.warning(f"Configuration file not found at {CONFIG_PATH}")
             return
@@ -116,16 +115,21 @@ class MainWindow(QMainWindow):
 
         if fp and os.path.exists(fp):
             try:
-                self.logger.debug(f"Loading file from config: {fp}")
+                self.logger.info(f"Loading file from config: {fp}")
                 self.data_manager.load_file(fp)  # Load the file
                 self.current_file = fp
                 if defaults:
-                    self.logger.debug("Updating tabs with default signals...")
+                    self.logger.info("Updating tabs with default signals...")
                     self.update_tabs(defaults)
             except Exception as e:
                 self.logger.error(f"Failed to load or update from config: {e}", exc_info=True)
         else:
-            self.logger.warning(f"Configured file path does not exist: {fp}")
+            self.logger.debug(f"Configured file path does not exist: {fp}")
+
+
+
+
+    # FIXME Limpiar codigo y sacar la logica de las tablas, hacer un widget y configurar manipular todo desde ahi
 
     def _load_file_dialog(self):
         """Open a file dialog to select a signal file and load it."""
@@ -138,30 +142,36 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
+            self.logger.info(f"DataManager trying to open a file at {path}")
             self.data_manager.load_file(path)
             self.current_file = path
             meta = self.data_manager.get_metadata(path)
             channels = meta.get("channels", [])
             if not channels:
+                self.logger.error(f"No channels found in {path}")
                 QMessageBox.warning(self, "No Channels", "No channels found in file.")
                 return
+            
             dlg = ChannelSelectionDialog(channels, self)
             if not dlg.exec():
                 return
             selected = dlg.get_selected_channels()
+            self.logger.info(f"{selected} channels selected for visualization on ViewerTab")
             if not selected:
                 QMessageBox.information(self, "No Selection", "No channels selected.")
                 return
             self.update_tabs(selected)
         except Exception as e:
+            self.logger.critical("Failed to load file:{e}")
             QMessageBox.critical(self, "Load Error", f"Failed to load file: {e}")
 
     def update_tabs(self, selected_channels):
+        #FIXME Arreglar para que ViewerTab se inicie vacia igual que las otras y luego se actualice
         """Create and insert ViewerTab, and update Tilt and Analysis tabs."""
         if not self.current_file:
             return
         path = self.current_file
-        meta = self.data_manager.get_metadata(path)
+        #meta = self.data_manager.get_metadata(path)
 
         # ViewerTab
         viewer = ViewerTab(self)
@@ -170,6 +180,7 @@ class MainWindow(QMainWindow):
             chunk_size=60,
             target_signals=selected_channels 
             )
+        # FIXME Intento de poder abrir distintos archivos, cada archivo deberia tener su propio grupo de tabs
         idx = self.tab_widget.count() - 2
         self.tab_widget.insertTab(idx, viewer, os.path.basename(path))
         self.tab_widget.setCurrentIndex(idx)
@@ -185,6 +196,7 @@ class MainWindow(QMainWindow):
             return
         path = self.current_file
         all_signals = self.data_manager.get_available_channels(path)
+        # FIXME Aqui perdemos la gracia del lazyloading, arreglar para solo cargar las señales necesarias post dialogo 
         traces = [self.data_manager.get_trace(path, ch) for ch in all_signals]
         intervals = extract_event_intervals(traces)
         tests = [iv.get("evento") for iv in intervals if iv.get("evento")]
@@ -236,6 +248,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Export", f"CSV exported to {save_path}")
         except Exception as ex:
             QMessageBox.critical(self, "Export Error", str(ex))
+
+
 
     def _close_tab(self, index):
         """Close the specified tab, unless it's Tilt or Analysis."""
