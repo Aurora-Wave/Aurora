@@ -250,9 +250,14 @@ class MainWindow(QMainWindow):
 
         # ViewerTab
         viewer = ViewerTab(self)
+        hr_params = self.analysis_tab.get_hrgen_params()
+
         viewer.load_data(
-            file_path=path, chunk_size=60, target_signals=selected_channels
-        )
+            file_path=path,
+            chunk_size=60,
+            target_signals=selected_channels,
+            hr_params=hr_params
+            )
         # FIXME Intento de poder abrir distintos archivos, cada archivo deberia tener su propio grupo de tabs
         idx = self.tab_widget.count() - 2
         self.tab_widget.insertTab(idx, viewer, os.path.basename(path))

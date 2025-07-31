@@ -68,15 +68,23 @@ class TiltTab(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.cellClicked.connect(self._on_row_selected)
 
-        # Controls
+        # Controls: filter, chunk size and scrollbar
         self.filter_box = QLineEdit(placeholderText="Filter events...")
         self.filter_box.textChanged.connect(self._apply_filter)
+
         self.chunk_spin = QSpinBox()
         self.chunk_spin.setSuffix(" s")
         self.chunk_spin.setRange(1, 600)
         self.chunk_spin.setValue(int(self._chunk_size))
         self.chunk_spin.valueChanged.connect(self._on_chunk_changed)
+
+        # ──────────── Improved Horizontal ScrollBar ────────────
         self.scrollbar = QScrollBar(Qt.Horizontal)
+        # make it expand horizontally
+        self.scrollbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # give it a visible height
+        self.scrollbar.setMinimumHeight(20)
+        self.scrollbar.setMaximumHeight(20)
         self.scrollbar.valueChanged.connect(self._on_scroll_changed)
         # Configurar tamaño mínimo para la barra de desplazamiento
         self.scrollbar.setMinimumWidth(300)  # Ancho mínimo de 300px
@@ -107,21 +115,28 @@ class TiltTab(QWidget):
         # Initialize data manager and path
         self.data_manager = dm
         self.file_path = path
-        # Determine channels
+
+        # Determine channels: from metadata + cache (to include HR_gen)
         meta = set(dm.get_available_channels(path))
         cache = {k.split("|")[0] for k in dm._files[path]["signal_cache"]}
         available = meta.union(cache)
         order = ["ECG", "HR_gen", "FBP", "Valsalva"]
         self.channel_names = [ch for ch in order if ch in available]
+
         # Extract intervals (events)
         signals = [dm.get_trace(path, ch) for ch in self.channel_names]
         self.intervals = extract_event_intervals(signals)
         self._selected_idx = None
+
+        # Populate table of events
         self._populate_table()
-        # Set context window (10 minutes)
+
+        # Set context window to first 10 minutes (or less)
         max_durations = [max(dm.get_trace(path, ch).time) for ch in self.channel_names]
         self._context_start = 0.0
         self._context_end = min(max(max_durations), self._context_start + 600.0)
+
+        # Configure scrollbar range and render initial chunk
         self._setup_scroll()
         # Initial chunk load
         self._request_chunk()
@@ -129,7 +144,8 @@ class TiltTab(QWidget):
     def _populate_table(self):
         self.table.setRowCount(len(self.intervals))
         for i, iv in enumerate(self.intervals):
-            te = iv.get("t_evento", 0)
+            t0 = iv.get("t_baseline", iv.get("t_evento", 0.0))
+            te = iv.get("t_evento", 0.0)
             t1 = iv.get("t_recovery", iv.get("t_tilt_down", te))
             dur = t1 - te  # Duración desde evento hasta fin
             items = [iv.get("evento", ""), te, t1, dur]

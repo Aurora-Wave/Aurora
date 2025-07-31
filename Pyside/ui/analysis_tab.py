@@ -13,7 +13,16 @@ from PySide6.QtWidgets import (
 import pyqtgraph as pg
 from processing.chunk_loader import ChunkLoader
 from PySide6.QtCore import Qt
+import logging
 
+def sanitize_for_plot(y, clip=1e6):
+    """Sanitize y-array for plotting: removes inf, nan, and extreme values."""
+    y = np.asarray(y)
+    if not np.all(np.isfinite(y)):
+        y = np.nan_to_num(y, nan=0.0, posinf=clip, neginf=-clip)
+    if np.abs(y).max() > clip:
+        y = np.clip(y, -clip, clip)
+    return y
 
 class AnalysisTab(QWidget):
     """
@@ -23,6 +32,7 @@ class AnalysisTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.logger = logging.getLogger(__name__)
         self.data_manager = None
         self.file_path = None
         self.fs = 1.0
@@ -44,7 +54,6 @@ class AnalysisTab(QWidget):
         main = QVBoxLayout(self)
         ctrl = QHBoxLayout()
 
-        # Wavelet selector
         ctrl.addWidget(QLabel("Wavelet:"))
         self.wavelet_cb = QComboBox()
         self.wavelet_cb.addItems(["haar", "db4", "db5", "sym4"])
@@ -52,7 +61,6 @@ class AnalysisTab(QWidget):
         self.wavelet_cb.currentTextChanged.connect(self._update)
         ctrl.addWidget(self.wavelet_cb)
 
-        # SWT level
         ctrl.addWidget(QLabel("Level:"))
         self.level_sb = QSpinBox()
         self.level_sb.setRange(1, 6)
@@ -60,7 +68,6 @@ class AnalysisTab(QWidget):
         self.level_sb.valueChanged.connect(self._update)
         ctrl.addWidget(self.level_sb)
 
-        # MinDist
         ctrl.addWidget(QLabel("MinDist (s):"))
         self.dist_sb = QDoubleSpinBox()
         self.dist_sb.setRange(0.1, 2.0)
@@ -69,7 +76,6 @@ class AnalysisTab(QWidget):
         self.dist_sb.valueChanged.connect(self._update)
         ctrl.addWidget(self.dist_sb)
 
-        # Chunk
         ctrl.addWidget(QLabel("Chunk (s):"))
         self.chunk_sb = QSpinBox()
         self.chunk_sb.setRange(1, 600)
@@ -77,7 +83,6 @@ class AnalysisTab(QWidget):
         self.chunk_sb.valueChanged.connect(self._on_chunk_changed)
         ctrl.addWidget(self.chunk_sb)
 
-        # Start
         ctrl.addWidget(QLabel("Start (s):"))
         self.start_sb = QSpinBox()
         self.start_sb.setRange(0, 0)
@@ -85,7 +90,6 @@ class AnalysisTab(QWidget):
         self.start_sb.valueChanged.connect(self._update)
         ctrl.addWidget(self.start_sb)
 
-        # Navigation buttons
         self.prev_btn = QPushButton("←")
         self.prev_btn.clicked.connect(self._go_previous_chunk)
         ctrl.addWidget(self.prev_btn)
@@ -95,17 +99,15 @@ class AnalysisTab(QWidget):
 
         main.addLayout(ctrl)
 
-        # Plot area
         self.plots = pg.GraphicsLayoutWidget()
         self.ecg_plot = self.plots.addPlot(row=0, col=0, title="ECG Chunk")
-        self.hr_plot = self.plots.addPlot(row=1, col=0, title="HR_gen Chunk")
-        self.wave_plot = self.plots.addPlot(row=2, col=0, title="Mother Wavelet")
+        self.hr_plot  = self.plots.addPlot(row=1, col=0, title="HR_gen Chunk")
+        self.wave_plot= self.plots.addPlot(row=2, col=0, title="Wavelet")
 
         for p in (self.ecg_plot, self.hr_plot, self.wave_plot):
             p.showGrid(x=True, y=True)
             p.getViewBox().setMouseEnabled(x=False, y=False)
 
-        # Disable context menu on ECG plot
         self.ecg_plot.getViewBox().setMenuEnabled(False)
 
         self.ecg_plot.setLabel("bottom", "Time (s)")
@@ -118,16 +120,16 @@ class AnalysisTab(QWidget):
 
         main.addWidget(self.plots)
 
-        # Connect mouse events
         self.ecg_plot.scene().sigMouseClicked.connect(self._on_ecg_click)
 
-        # Track last chunk for index conversion
         self._last_chunk_start = 0
         self._last_chunk_len = 0
         self._last_peaks = None
         self._last_ecg_chunk = None
 
     def update_analysis_tab(self, data_manager, file_path):
+        self.logger.info(f"Updating AnalysisTab for file: {file_path}")
+
         self.data_manager = data_manager
         self.file_path = file_path
         ecg = self.data_manager.get_trace(file_path, "ECG")
@@ -135,8 +137,6 @@ class AnalysisTab(QWidget):
         length = len(ecg.data)
         self.duration = length / self.fs
 
-        # max_lvl = pywt.swt_max_level(length)
-        # self._max_lvl = max(1, max_lvl)
         if self.level > self._max_lvl:
             self.level = self._max_lvl
         self.level_sb.setRange(1, self._max_lvl)
@@ -169,13 +169,17 @@ class AnalysisTab(QWidget):
 
         # ECG chunk
         ecg_chunk = ChunkLoader.get_chunk(
-            self.data_manager, self.file_path, ["ECG"], start, chunk
-        )
+            self.data_manager, self.file_path, ["ECG"], start, chunk)
         t_ecg = np.arange(len(ecg_chunk)) / self.fs + start
+        y_ecg = sanitize_for_plot(ecg_chunk)
 
         # HR_gen global (full signal)
         hr_sig = self.data_manager.get_trace(
-            self.file_path, "HR_GEN", wavelet=wav, swt_level=lvl, min_rr_sec=md
+            self.file_path,
+            "HR_GEN",
+            wavelet=wav,
+            swt_level=lvl,
+            min_rr_sec=md
         )
         hr_t = hr_sig.time
         hr_v = hr_sig.data
@@ -184,6 +188,7 @@ class AnalysisTab(QWidget):
         mask = (hr_t >= start) & (hr_t < start + chunk)
         hr_t_chunk = hr_t[mask]
         hr_v_chunk = hr_v[mask]
+        y_hr = sanitize_for_plot(hr_v_chunk)
 
         # Detected R-peaks (global indices)
         r_peaks = hr_sig.r_peaks
@@ -196,12 +201,34 @@ class AnalysisTab(QWidget):
 
         # Plot ECG with peaks
         self.ecg_plot.clear()
-        self.ecg_plot.plot(t_ecg, ecg_chunk, pen="b")
-        self.ecg_plot.plot(
-            t_peaks, y_peaks, pen=None, symbol="o", symbolBrush="r", symbolSize=10
-        )
+        self.ecg_plot.plot(t_ecg, y_ecg, pen='b')
 
-        # Store for mouse interaction
+        # Get HR values at each peak in the current chunk
+        hr_peaks = hr_sig.data[peaks_in_chunk.astype(int)]
+        nan_mask = ~np.isfinite(hr_peaks)
+        valid_mask = ~nan_mask
+
+        # Plot valid peaks (HR finite): RED
+        if np.any(valid_mask):
+            self.ecg_plot.plot(
+                t_peaks[valid_mask],
+                y_peaks[valid_mask],
+                pen=None,
+                symbol='o',
+                symbolBrush='r',
+                symbolSize=10
+            )
+        # Plot NaN peaks (HR NaN or inf): GREEN
+        if np.any(nan_mask):
+            self.ecg_plot.plot(
+                t_peaks[nan_mask],
+                y_peaks[nan_mask],
+                pen=None,
+                symbol='o',
+                symbolBrush='g',
+                symbolSize=10
+            )
+
         self._last_chunk_start = start
         self._last_chunk_len = chunk
         self._last_peaks = peaks_in_chunk
@@ -209,19 +236,24 @@ class AnalysisTab(QWidget):
 
         # Plot HR_gen
         self.hr_plot.clear()
-        if hr_v_chunk.size:
-            hr_min = hr_v_chunk.min() - 10
-            hr_max = hr_v_chunk.max() + 10
-            self.hr_plot.plot(hr_t_chunk, hr_v_chunk, pen="g")
+        if hr_v_chunk.size and np.any(np.isfinite(hr_v_chunk)):
+            hr_min = np.nanmin(hr_v_chunk) - 10
+            hr_max = np.nanmax(hr_v_chunk) + 10
+            if not np.isfinite(hr_min) or not np.isfinite(hr_max) or hr_min == hr_max:
+                hr_min, hr_max = 20, 200  # fallback for physiological HR
+            self.hr_plot.plot(hr_t_chunk, y_hr, pen='g')
             self.hr_plot.setYRange(hr_min, hr_max)
+        else:
+            self.hr_plot.setYRange(20, 200)
 
-        # Wavelet
+        # Wavelet plot
         try:
             _, psi, x = pywt.Wavelet(wav).wavefun(level=lvl)
-        except:
+        except Exception:
             psi, x = pywt.Wavelet(wav).wavefun()[:2]
+        psi = sanitize_for_plot(psi)
         self.wave_plot.clear()
-        self.wave_plot.plot(x, psi, pen="m")
+        self.wave_plot.plot(x, psi, pen='m')
 
     # Mouse interaction: click-inicio y click-destino
     def _on_ecg_click(self, event):
@@ -231,6 +263,9 @@ class AnalysisTab(QWidget):
         t_click = mouse_point.x()
         fs = self.fs
         global_idx = int(t_click * fs)
+        
+        self.logger.debug(f"Clicked at {t_click:.2f}s (index={global_idx}), drag mode={self._is_dragging}")
+
         hr_sig = self.data_manager.get_trace(
             self.file_path,
             "HR_GEN",
@@ -256,6 +291,14 @@ class AnalysisTab(QWidget):
                 self._dragged_peak_idx = None
                 self._is_dragging = False
                 self._update()
+                self.data_manager.update_hr_cache(
+                    self.file_path, hr_sig,
+                    wavelet=self.wavelet_cb.currentText(),
+                    swt_level=self.level_sb.value(),
+                    min_rr_sec=self.dist_sb.value()
+                )
+                self.logger.debug("Updated HR_GEN cache after moving peak.")
+
             elif idx_near.size:
                 # Click-inicio: seleccionar peak para mover
                 self._dragged_peak_idx = idx_near[0]
@@ -287,9 +330,10 @@ class AnalysisTab(QWidget):
             raw_ecg = self.data_manager.get_trace(self.file_path, "ECG").data
             search_start = max(global_idx - window, 0)
             search_end = min(global_idx + window, len(raw_ecg))
-            local_max_idx = (
-                np.argmax(np.abs(raw_ecg[search_start:search_end])) + search_start
-            )
+            local_max_idx = np.argmax(np.abs(raw_ecg[search_start:search_end])) + search_start
+            
+            self.logger.info(f"Adding new R-peak at index: {local_max_idx}")
+            
             hr_sig.r_peaks = np.sort(np.append(hr_sig.r_peaks, local_max_idx))
             # Update only the segments around the new peak
             i = np.searchsorted(hr_sig.r_peaks, local_max_idx)
@@ -299,6 +343,14 @@ class AnalysisTab(QWidget):
                 hr_sig._update_hr_segment(i)
             hr_sig._data = hr_sig._data.copy()
             self._update()
+            self.data_manager.update_hr_cache(
+                self.file_path, 
+                hr_sig,
+                wavelet=self.wavelet_cb.currentText(),
+                swt_level=self.level_sb.value(),
+                min_rr_sec=self.dist_sb.value())
+        self.logger.debug("Updated HR_GEN cache after adding peak.")
+
 
     def _handle_delete_peak(self, event):
         pos = event.scenePos()
@@ -319,6 +371,9 @@ class AnalysisTab(QWidget):
         if idx_near.size:
             peak_idx = idx_near[0]
             hr_sig.r_peaks = np.delete(hr_sig.r_peaks, peak_idx)
+
+            self.logger.info(f"Deleting R-peak at index: {hr_sig.r_peaks[idx_near[0]]}")
+
             # Update HR around removed peak
             if peak_idx > 0:
                 hr_sig._update_hr_segment(peak_idx - 1)
@@ -326,3 +381,17 @@ class AnalysisTab(QWidget):
                 hr_sig._update_hr_segment(peak_idx)
             hr_sig._data = hr_sig._data.copy()
             self._update()
+            self.data_manager.update_hr_cache(
+                self.file_path, hr_sig,
+                wavelet=self.wavelet_cb.currentText(),
+                swt_level=self.level_sb.value(),
+                min_rr_sec=self.dist_sb.value()
+            )
+            self.logger.debug("Updated HR_GEN cache after deleting peak.")
+
+    def get_hrgen_params(self):
+        return {
+            "wavelet": self.wavelet_cb.currentText(),
+            "swt_level": self.level_sb.value(),
+            "min_rr_sec": self.dist_sb.value()
+        }

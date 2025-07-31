@@ -3,7 +3,7 @@ import adi
 from core.signal import Signal, HR_Gen_Signal
 from core.comments import EMSComment
 from data.base_loader import BaseLoader
-
+import logging
 class AditchLoader(BaseLoader):
     """
     Loader for .adicht files using adi.read_file.
@@ -15,6 +15,7 @@ class AditchLoader(BaseLoader):
         self.file_data = None
         self.metadata = {}
         self.comments = []
+        self.logger = logging.getLogger(__name__)
 
     def load(self, path: str):
         self.path = path
@@ -58,6 +59,7 @@ class AditchLoader(BaseLoader):
 
         # HR
         if upper == "HR_GEN" and "ECG" in self.metadata['channels']:
+            self.logger.info("Triying to generated HR")
             # Derive HR from ECG, using kwargs if provided
             raw_sig = self.get_full_trace('ECG', gap_length)
             # Defaults for HR_gen parameters
@@ -79,6 +81,9 @@ class AditchLoader(BaseLoader):
                 min_rr_sec=min_rr_sec
             )
             hr_sig.MarkerData = raw_sig.MarkerData
+            self.metadata.get('channels').append("HR_gen")
+            self.logger.debug((f" canales actuales {self.metadata.get('channels')}"))
+
             return hr_sig
 
         # Otherwise, load raw channel
