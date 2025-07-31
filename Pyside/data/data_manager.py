@@ -2,10 +2,12 @@ import os
 from collections import deque
 
 from .aditch_loader import AditchLoader
+
 # from .edf_loader import EDFLoader
 
 MAX_CHUNKS_PER_CHANNEL = 5
 MAX_HR_CACHE = 5  # Max HR configurations to cache
+
 
 class DataManager:
     def __init__(self):
@@ -29,8 +31,8 @@ class DataManager:
             "signal_cache": {},
             "metadata": loader.get_metadata(),
             "comments": loader.get_all_comments(),
-            "hr_cache": {},                       # dict: key → Signal
-            "hr_cache_keys": deque(maxlen=MAX_HR_CACHE)  # orden de las keys
+            "hr_cache": {},  # dict: key → Signal
+            "hr_cache_keys": deque(maxlen=MAX_HR_CACHE),  # orden de las keys
         }
 
     def get_trace(self, path: str, channel: str, **kwargs):
@@ -70,8 +72,15 @@ class DataManager:
         return self._files[path]["metadata"]
 
     def get_available_channels(self, path: str):
-        """List channels according to file metadata."""
-        return self._files[path]["metadata"].get("channels", [])
+        """List channels according to file metadata, including computed signals."""
+        base_channels = self._files[path]["metadata"].get("channels", [])
+
+        # Agregar canales computados disponibles
+        computed_channels = []
+        if "ECG" in base_channels:
+            computed_channels.append("HR_gen")
+
+        return base_channels + computed_channels
 
     def unload_file(self, path: str):
         """Remove a file and its caches from the manager."""

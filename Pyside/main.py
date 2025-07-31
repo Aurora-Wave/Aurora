@@ -1,6 +1,10 @@
 from PySide6.QtWidgets import QApplication
 from ui.main_window import MainWindow
 import sys
+import os
+
+# Suprimir advertencias menores de Qt
+os.environ["QT_LOGGING_RULES"] = "qt.core.qobject.connect.warning=false"
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

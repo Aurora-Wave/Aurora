@@ -3,40 +3,83 @@ ExportSelectionDialog
 Diálogo para seleccionar señales y tests a exportar.
 """
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QAbstractItemView
+from PySide6.QtWidgets import (
+    QDialog,
+    QVBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QHBoxLayout,
+    QAbstractItemView,
+    QGroupBox,
+)
 from PySide6.QtCore import Qt
+
 
 class ExportSelectionDialog(QDialog):
     def __init__(self, signals, tests, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Select Signals and Tests to Export")
+        self.setMinimumSize(400, 500)
         self.selected_signals = []
         self.selected_tests = []
+
         layout = QVBoxLayout()
 
-        layout.addWidget(QLabel("Select signals to export:"))
+        # Grupo de señales
+        sig_group = QGroupBox("Signals to Export")
+        sig_layout = QVBoxLayout()
+        sig_layout.addWidget(QLabel("Select physiological signals:"))
+
         self.signal_list = QListWidget()
         self.signal_list.setSelectionMode(QAbstractItemView.MultiSelection)
         for sig in signals:
             item = QListWidgetItem(sig)
             self.signal_list.addItem(item)
-        layout.addWidget(self.signal_list)
+        sig_layout.addWidget(self.signal_list)
+        sig_group.setLayout(sig_layout)
+        layout.addWidget(sig_group)
 
-        layout.addWidget(QLabel("Select tests to export:"))
+        # Grupo de tests
+        test_group = QGroupBox("Test Instances to Export")
+        test_layout = QVBoxLayout()
+        test_layout.addWidget(
+            QLabel("Select test instances (with timestamp for identification):")
+        )
+
         self.test_list = QListWidget()
         self.test_list.setSelectionMode(QAbstractItemView.MultiSelection)
         for test in tests:
             item = QListWidgetItem(test)
+            # Agregar tooltip con información adicional si es necesario
+            if " (at " in test:
+                base_name = test.split(" (at ")[0]
+                time_info = test.split(" (at ")[1].rstrip(")")
+                item.setToolTip(f"Test: {base_name}\nStart time: {time_info}")
             self.test_list.addItem(item)
-        layout.addWidget(self.test_list)
+        test_layout.addWidget(self.test_list)
+        test_group.setLayout(test_layout)
+        layout.addWidget(test_group)
 
+        # Info adicional
+        info_label = QLabel(
+            "📊 Export format: Statistics per minute (mean & max values)\n"
+            "📁 Output: CSV file with semicolon separator\n"
+            "💡 HR_gen: Computed heart rate signal available\n"
+            "⏱️ Multiple tests: Distinguished by start time"
+        )
+        info_label.setStyleSheet("QLabel { color: #666; font-style: italic; }")
+        layout.addWidget(info_label)
+
+        # Botones
         button_row = QHBoxLayout()
-        ok_btn = QPushButton("OK")
+        ok_btn = QPushButton("Export")
         cancel_btn = QPushButton("Cancel")
         ok_btn.clicked.connect(self.accept)
         cancel_btn.clicked.connect(self.reject)
-        button_row.addWidget(ok_btn)
         button_row.addWidget(cancel_btn)
+        button_row.addWidget(ok_btn)
         layout.addLayout(button_row)
 
         self.setLayout(layout)
