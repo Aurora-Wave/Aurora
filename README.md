@@ -41,14 +41,19 @@ Pyside/
 │   ├── tilt_tab.py          # Tab for Tilt Test protocol exploration
 │   ├── viewer_tab.py        # Tab for scrolling visualization of multiple signals
 │   └── widgets/
-│       ├── channel_selection_dialog.py   # Dialog to select signal channels
-│       ├── export_markers.py             # Widget for exporting marker data
-│       ├── export_selection_dialog.py    # Dialog to select export targets
-│       └── selectable_viewbox.py         # Interactive ViewBox with synchronized selection
+│   |   ├── channel_selection_dialog.py   # Dialog to select signal channels
+│   |   ├── export_markers.py             # Widget for exporting marker data
+│   |   ├── export_selection_dialog.py    # Dialog to select export targets
+│   |   └── selectable_viewbox.py         # Interactive ViewBox with synchronized selection
+│   └── utils/
+│   |   ├── error_handler.py   
+│   |   ├── scroll_config.py   
+
+```
 
 
 
-## Instalación
+Instalación
 
 Para crear un ambiente virtual, se puede usar el siguiente comando:
 
