@@ -1,64 +1,66 @@
-"""
-chunk_loader.py
----------------
-Efficient loading of chunks of physiological signals using the new SignalGroup structure.
-"""
-
 from PySide6.QtCore import QObject, Signal as QtSignal
 import numpy as np
-from data.adicht_loader import load_adicht
-
 
 class ChunkLoader(QObject):
     """
-    Chunk loader for physiological signals.
-    Loads only the necessary data portion for efficient visualization.
-    Compatible with the new SignalGroup structure.
+    Qt-based chunk loader for physiological signals.
+    Includes both synchronous (static) and asynchronous (QtSignal) interfaces.
     """
 
-    chunk_loaded = QtSignal(int, int, dict)  # start_sec, end_sec, {channel_name: chunk}
+    chunk_loaded = QtSignal(float, float, dict)  # start_sec, end_sec, {channel: chunk}
 
-    def __init__(self, file_path, channel_names, chunk_size, parent=None, signal_group=None):
-        """
-        Args:
-            file_path (str): Path to .adicht file.
-            channel_names (list[str]): Names of channels to extract.
-            chunk_size (int): Chunk duration in seconds.
-            parent: Optional parent object.
-            signal_group (SignalGroup): Preloaded signals (optional).
-        """
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.file_path = file_path
-        self.channel_names = channel_names
-        self.chunk_size = chunk_size
-        self.signal_group = signal_group
-        self._cache = {}  # (channel_name, start, end): data
 
-    def set_signal_group(self, signal_group):
-        """Update the SignalGroup object used for chunking."""
-        self.signal_group = signal_group
+    @staticmethod
+    def get_chunk(data_manager, file_path: str, channel_names: list[str],
+                  start_sec: float, duration_sec: float):
+        """
+        Synchronously extract the chunk(s) of data requested from DataManager.
+        Returns the chunk(s) immediately (blocking call).
 
-    def load_signal_group(self):
-        """Load the signal group from disk if not yet available."""
-        if self.signal_group is None:
-            self.signal_group = load_adicht(self.file_path)
+        Args:
+            data_manager: DataManager instance.
+            file_path (str): Path to the file loaded in DataManager.
+            channel_names (list[str]): Names of channels to extract.
+            start_sec (float): Start time (seconds).
+            duration_sec (float): Duration (seconds).
 
-    def request_chunk(self, start_sec, end_sec):
-        """Emit a chunk of data between start_sec and end_sec for all requested channels."""
-        self.load_signal_group()
+        Returns:
+            If only one channel: np.ndarray.
+            If multiple: dict {channel: np.ndarray}.
+        """
+        results = {}
+        for ch in channel_names:
+            sig = data_manager.get_trace(file_path, ch)
+            if sig is None:
+                continue
+            fs = sig.fs
+            data = sig.data
+            start_idx = int(max(0, min(start_sec * fs, len(data) - 1)))
+            end_idx = int(max(start_idx + 1, min((start_sec + duration_sec) * fs, len(data))))
+            chunk = data[start_idx:end_idx]
+            results[ch] = chunk
+
+        if len(results) == 1:
+            return next(iter(results.values()))
+        return results
+
+    def request_chunk(self, data_manager, file_path: str, channel_names: list[str],
+                      start_sec: float, duration_sec: float):
+        """
+        Asynchronously extract the chunk(s) and emit result via QtSignal.
+        """
         result = {}
+        for ch in channel_names:
+            sig = data_manager.get_trace(file_path, ch)
+            if sig is None:
+                continue
+            fs = sig.fs
+            data = sig.data
+            start_idx = int(max(0, min(start_sec * fs, len(data) - 1)))
+            end_idx = int(max(start_idx + 1, min((start_sec + duration_sec) * fs, len(data))))
+            chunk = data[start_idx:end_idx]
+            result[ch] = chunk
 
-        for name in self.channel_names:
-            signal = self.signal_group.get(name)
-            if signal is not None:
-                fs = signal.fs
-                # Usar solo el array principal de datos, sin buffers BB/AB
-                data = signal.data if hasattr(signal, 'data') else signal.get_full_signal()
-                start_idx = int(start_sec * fs)
-                end_idx = int(end_sec * fs)
-                start_idx = max(0, min(start_idx, len(data)-1))
-                end_idx = max(start_idx+1, min(end_idx, len(data)))
-                chunk = data[start_idx:end_idx]
-                result[name] = chunk.astype(np.float32)
-
-        self.chunk_loaded.emit(start_sec, end_sec, result)
+        self.chunk_loaded.emit(start_sec, start_sec + duration_sec, result)

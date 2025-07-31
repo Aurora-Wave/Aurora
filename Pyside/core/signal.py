@@ -1,107 +1,182 @@
+# data/signal.py
+
 import numpy as np
+from processing.ecg_analyzer import ECGAnalyzer
 
 class Signal:
     """
-    Represents a single physiological signal, including time series data, units,
-    sampling frequency, and optional buffers, annotations, and analysis fields.
+    Represents a single physiological signal, including time series data,
+    units, sampling frequency, and optional buffers and annotations.
     """
-
-    def __init__(self, name, data, time, units="a.u.", fs=1.0):
+    def __init__(self, name: str, data: np.ndarray, time: np.ndarray,
+                 units: str = "a.u.", fs: float = 1.0):
+        # signal metadata
         self.name = name
         self.units = units
         self.fs = fs
 
+        # core data arrays
         self._data = np.asarray(data)
         self._time = np.asarray(time)
 
-        # Optional: boundary buffers (for pre/post padding)
-        self.BB = np.array([])
-        self.AB = np.array([])
+        # optional buffers
+        self.BB = np.array([])  # before-buffer
+        self.AB = np.array([])  # after-buffer
 
-        # Optional: annotations (e.g. from LabChart)
+        # annotations (e.g., markers)
         self.MarkerData = []
 
-        # Optional: ECG-specific analysis (if applicable)
-        self.FMxI = []  # R-peak indices
-        self.CL = []    # RR intervals in samples
-        self.CLI = []   # Second peak index per RR
-        self.CLT = []   # Time of second peak (s)
-
     @property
-    def data(self):
+    def data(self) -> np.ndarray:
         return self._data
 
     @property
-    def time(self):
+    def time(self) -> np.ndarray:
         return self._time
 
-    #def get_segment(self, start_time, end_time):
-    #    """
-    #    Return a Signal segment between start_time and end_time.
-    #    """
-    #    mask = (self._time >= start_time) & (self._time <= end_time)
-    #    return Signal(self.name, self._data[mask], self._time[mask], self.units, self.fs)
-
-    def get_full_signal(self, include_time=False):
+    def to_csv(self, filepath: str):
         """
-        Reconstruct the full signal including BB and AB buffers.
-
-        Returns:
-            np.ndarray or (np.ndarray, np.ndarray)
+        Export the signal (time, data) to a CSV file.
         """
-        full_data = np.concatenate([self.BB, self._data, self.AB])
-        if include_time:
-            total_len = len(full_data)
-            full_time = np.linspace(1 / self.fs, total_len / self.fs, total_len)
-            return full_data, full_time
-        return full_data
-
-    def to_csv(self, filepath):
-        """
-        Export the signal to a CSV file.
-        """
-        np.savetxt(filepath, np.column_stack((self._time, self._data)),
-                   delimiter=",", header="time,data", comments='')
-
-    def __getitem__(self, key):
-        return self._data[key], self._time[key]
+        arr = np.column_stack((self._time, self._data))
+        np.savetxt(filepath, arr, delimiter=",", header="time,data", comments="")
 
     def __len__(self):
         return len(self._data)
-    def __str__(self):
-        """
-        Return a human-readable summary of the signal object.
-        """
-        n_samples = len(self._data)
-        duration = self._time[-1] - self._time[0] if n_samples > 1 else 0
-        t = 200
-        return (
-            f"Signal: {self.name}\n"
-            f"  Units: {self.units}\n"
-            f"  Sampling Rate: {self.fs} Hz\n"
-            f"  Duration: {duration:.2f} seconds\n"
-            f"  Samples: {n_samples}\n"
-            f"  First 30 data points: {self._data[t:t+30]}\n"
-            f"  First 30 time values: {self._time[t:t+30]}"
-        )
 
+    def __str__(self):
+        n = len(self._data)
+        dur = (self._time[-1] - self._time[0]) if n > 1 else 0
+        preview = np.round(self._data[:min(10, n)], 3)
+        return (f"Signal '{self.name}': {n} samples, {dur:.2f}s, fs={self.fs}Hz\n"
+                f"First data pts: {preview}")
+
+
+class HR_Gen_Signal(Signal):
+    """
+    Specialized Signal for derived HR: integrates R-peak detection
+    and incremental HR updates.
+    """
+    def __init__(self, name: str, ecg_data: np.ndarray, ecg_time: np.ndarray,
+                 units: str, fs: float):
+        # initialize base signal with raw ECG data
+        super().__init__(name=name,data=ecg_data,time=ecg_time,units=units,fs=fs)
+        # container for detected peak indices
+        self.r_peaks = np.array([])
+
+    def set_r_peaks(self, ECG: Signal, **kargs):
+        """
+        Detect R-peaks and generate the full HR series.
+        """
+        # detect peaks on raw ECG
+        peaks = ECGAnalyzer.detect_rr_peaks(ECG.data, ECG.fs, **kargs)
+        self.r_peaks = np.sort(np.asarray(peaks))
+        # fill in HR values across entire signal
+        self._generate_full_hr()
+
+    def _generate_full_hr(self):
+        """
+        Internal: fill HR values between each pair of R-peaks.
+        """
+        if len(self.r_peaks) < 2:
+            return
+        hr_data = np.zeros_like(self._data)
+        # compute HR for each interval
+        for i in range(len(self.r_peaks) - 1):
+            start = int(self.r_peaks[i])
+            end = int(self.r_peaks[i + 1])
+            rr = (end - start) / self.fs
+            if rr <= 0:
+                continue
+            hr = 60.0 / rr
+            hr_data[start:end] = hr
+        self._data = hr_data
+        self.units = "bpm"
+
+    def add_peak(self, new_peak: int):
+        """
+        Append a new R-peak and update only the new segment's HR.
+        """
+        if self.r_peaks.size == 0:
+            # first peak: store and wait for next
+            self.r_peaks = np.array([new_peak])
+            return
+        last = int(self.r_peaks[-1])
+        if new_peak <= last:
+            raise ValueError("New peak must be greater than last detected peak.")
+        # compute HR for the new interval
+        rr = (new_peak - last) / self.fs
+        if rr <= 0:
+            return
+        hr = 60.0 / rr
+        # append and fill segment
+        self.r_peaks = np.append(self.r_peaks, new_peak)
+        self._data[last:new_peak] = hr
+
+    def update_peak(self, i: int, new_index: int):
+        """
+        Modify an existing R-peak and update affected HR segments.
+        """
+        if not (0 <= i < len(self.r_peaks)):
+            return
+        self.r_peaks[i] = new_index
+        self.r_peaks = np.sort(self.r_peaks)
+        # update segments around the modified peak
+        if i > 0:
+            self._update_hr_segment(i - 1)
+        if i < len(self.r_peaks) - 1:
+            self._update_hr_segment(i)
+
+    def _update_hr_segment(self, i: int):
+        """
+        Recompute HR for interval between r_peaks[i] and r_peaks[i+1].
+        """
+        start = int(self.r_peaks[i])
+        end = int(self.r_peaks[i + 1])
+        rr = (end - start) / self.fs
+        if rr <= 0 or start >= end:
+            return
+        hr = 60.0 / rr
+        self._data[start:end] = hr
+
+    def get_hr_signal(self):
+        """
+        Return a standalone Signal object of the HR series.
+        """
+        if len(self.r_peaks) < 2:
+            return None
+        return Signal(
+            name=f"{self.name}_HRgen",
+            data=self._data.copy(),
+            time=self._time.copy(),
+            units="bpm",
+            fs=self.fs
+        )
 
 
 class SignalGroup:
     """
-    Represents a collection of Signal objects.
-    Provides access, listing, and export functionalities.
+    Container for multiple Signal or Signal subclasses.
     """
+    def __init__(self, signals: list[Signal]):
+        self.signals = {sig.name: sig for sig in signals}
 
-    def __init__(self, signals):
-        self.signals = {s.name: s for s in signals}
-
-    def get(self, name):
+    def get(self, name: str) -> Signal | None:
         return self.signals.get(name)
 
-    def list_names(self):
+    def list_names(self) -> list[str]:
         return list(self.signals.keys())
 
-    def export_all(self, folder_path):
-        for signal in self.signals.values():
-            signal.to_csv(f"{folder_path}/{signal.name}.csv")
+    def add(self, sig: Signal):
+        self.signals[sig.name] = sig
+
+    def remove(self, name: str):
+        self.signals.pop(name, None)
+
+    def export_all(self, folder: str):
+        """
+        Export each signal to CSV in the given folder.
+        """
+        for sig in self.signals.values():
+            path = f"{folder}/{sig.name}.csv"
+            sig.to_csv(path)
