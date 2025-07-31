@@ -161,18 +161,11 @@ class AnalysisTab(QWidget):
         start = self.start_sb.value()
 
         # ECG chunk
-        ecg_chunk = ChunkLoader.get_chunk(
-            self.data_manager, self.file_path, ["ECG"], start, chunk)
+        ecg_chunk = ChunkLoader.get_chunk(self.data_manager, self.file_path, ["ECG"], start, chunk)
         t_ecg = np.arange(len(ecg_chunk)) / self.fs + start
 
         # HR_gen global (full signal)
-        hr_sig = self.data_manager.get_trace(
-            self.file_path,
-            "HR_GEN",
-            wavelet=wav,
-            swt_level=lvl,
-            min_rr_sec=md
-        )
+        hr_sig = self.data_manager.get_trace(self.file_path,"HR_GEN",wavelet=wav,swt_level=lvl,min_rr_sec=md)
         hr_t = hr_sig.time
         hr_v = hr_sig.data
 
@@ -213,6 +206,8 @@ class AnalysisTab(QWidget):
             psi, x = pywt.Wavelet(wav).wavefun()[:2]
         self.wave_plot.clear()
         self.wave_plot.plot(x, psi, pen='m')
+
+
 
     # Mouse interaction: click-inicio y click-destino
     def _on_ecg_click(self, event):
