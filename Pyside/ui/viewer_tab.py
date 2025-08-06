@@ -13,12 +13,15 @@ import pyqtgraph as pg
 from Pyside.ui.widgets.selectable_viewbox import SelectableViewBox
 from Pyside.processing.chunk_loader import ChunkLoader
 from Pyside.core.channel_units import get_channel_label_with_unit
+from Pyside.core import get_user_logger
+from Pyside.ui.managers.comment_marker_manager import CommentMarkerManager
 
 
 class ViewerTab(QWidget):
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
+        self.logger = get_user_logger(self.__class__.__name__)
         self.plots = []
         self.scrollbar = None
         self.chunk_size_spinbox = None
@@ -27,6 +30,9 @@ class ViewerTab(QWidget):
         self.chunk_size = 60
         self.hr_params = {}
         self.comment_markers = {}  # Track comment markers per plot for cleanup
+        
+        # Unified comment marker management
+        self.marker_manager = CommentMarkerManager("ViewerTab")
 
         # Layouts
         self.controls_layout = QHBoxLayout()
@@ -53,17 +59,52 @@ class ViewerTab(QWidget):
         self.hr_params = hr_params or {}
         self.target_signals = target_signals
 
-        # Prepare y-axis ranges for each signal
+        # Calculate global Y-axis ranges for each signal across the entire signal length
         dm = self.main_window.data_manager
         self.y_ranges = {}
         for signal_name in self.target_signals:
-            sig = dm.get_trace(self.file_path, signal_name)
-            y_valid = sig.data[~np.isnan(sig.data)]
-            if len(y_valid):
-                y_min, y_max = float(np.min(y_valid)), float(np.max(y_valid))
-            else:
-                y_min, y_max = 0, 1
-            self.y_ranges[signal_name] = (y_min, y_max)
+            try:
+                # Get the full signal trace for global min/max calculation
+                # Only apply HR parameters to HR_GEN signals
+                if signal_name.upper() == "HR_GEN":
+                    sig = dm.get_trace(self.file_path, signal_name, **self.hr_params)
+                else:
+                    sig = dm.get_trace(self.file_path, signal_name)
+                
+                # Calculate global min/max across entire signal, excluding NaN values
+                y_data = np.asarray(sig.data)
+                y_valid = y_data[np.isfinite(y_data)]  # Remove NaN and inf values
+                
+                if len(y_valid) > 0:
+                    y_min, y_max = float(np.min(y_valid)), float(np.max(y_valid))
+                    
+                    # Add small padding (5%) for better visualization
+                    if y_min != y_max:
+                        y_range = y_max - y_min
+                        padding = y_range * 0.05
+                        y_min -= padding
+                        y_max += padding
+                    else:
+                        # Handle constant signals
+                        if y_min == 0:
+                            y_min, y_max = -0.1, 0.1
+                        else:
+                            padding = abs(y_min) * 0.1
+                            y_min -= padding
+                            y_max += padding
+                    
+                    self.logger.debug(f"Global Y-range for {signal_name}: {y_min:.3f} to {y_max:.3f} (from {len(y_valid)} valid samples)")
+                else:
+                    # Fallback for signals with no valid data
+                    y_min, y_max = -1.0, 1.0
+                    self.logger.warning(f"No valid data for {signal_name}, using default range")
+                
+                self.y_ranges[signal_name] = (y_min, y_max)
+                
+            except Exception as e:
+                # Robust fallback for any errors during range calculation
+                self.logger.error(f"Error calculating Y-range for {signal_name}: {e}")
+                self.y_ranges[signal_name] = (-1.0, 1.0)
         self.setup_plots(self.target_signals)
         self._init_chunk_controls()
         self._setup_chunk_loader()
@@ -163,9 +204,16 @@ class ViewerTab(QWidget):
     def update_chunk(self, start, end, data_dict):
         for i, signal_name in enumerate(self.target_signals):
             p = self.plots[i]
-            sig = self.main_window.data_manager.get_trace(
-                self.file_path, signal_name, **self.hr_params
-            )
+            # Only use HR parameters for HR_GEN signals
+            if signal_name.upper() == "HR_GEN":
+                sig = self.main_window.data_manager.get_trace(
+                    self.file_path, signal_name, **self.hr_params
+                )
+            else:
+                # Raw signals should never use HR parameters
+                sig = self.main_window.data_manager.get_trace(
+                    self.file_path, signal_name
+                )
             fs = sig.fs
             expected_len = int(self.chunk_size * fs)
             start_idx = int(start * fs)
@@ -188,14 +236,37 @@ class ViewerTab(QWidget):
                 t = t[::step]
             p.curve.setData(t, y)
             p.setXRange(start, end, padding=0)
-            y_min, y_max = self.y_ranges.get(signal_name, (0, 1))
-            if (
-                not np.isfinite(y_min)
-                or not np.isfinite(y_max)
-                or abs(y_max - y_min) > 1e6
-            ):
-                y_min, y_max = 0, 1
-            p.setYRange(y_min, y_max)
+            
+            # Apply global Y-range for consistent scaling across all chunks
+            y_min, y_max = self.y_ranges.get(signal_name, (-1.0, 1.0))
+            
+            # Additional safety checks
+            if not np.isfinite(y_min) or not np.isfinite(y_max):
+                self.logger.warning(f"Invalid Y-range for {signal_name}: {y_min}, {y_max}. Using fallback.")
+                y_min, y_max = -1.0, 1.0
+            elif abs(y_max - y_min) > 1e6:
+                self.logger.warning(f"Y-range too large for {signal_name}: {y_max - y_min}. Clamping.")
+                y_center = (y_min + y_max) / 2
+                y_min, y_max = y_center - 1e5, y_center + 1e5
+            elif y_min == y_max:
+                # Handle edge case where min equals max
+                padding = max(abs(y_min) * 0.1, 0.1)
+                y_min -= padding
+                y_max += padding
+            
+            p.setYRange(y_min, y_max, padding=0)
+            
+            # Debug: Show current chunk vs global range occasionally
+            if hasattr(self, '_debug_counter'):
+                self._debug_counter += 1
+            else:
+                self._debug_counter = 1
+            
+            if self._debug_counter % 20 == 1:  # Every 20th update
+                chunk_y_valid = y[np.isfinite(y)]
+                if len(chunk_y_valid) > 0:
+                    chunk_min, chunk_max = np.min(chunk_y_valid), np.max(chunk_y_valid)
+                    self.logger.debug(f"{signal_name} - Chunk range: [{chunk_min:.3f}, {chunk_max:.3f}], Global range: [{y_min:.3f}, {y_max:.3f}]")
 
         # Add comment markers after updating all plots
         self._add_comment_markers()
@@ -212,93 +283,109 @@ class ViewerTab(QWidget):
         self.comment_markers.clear()
 
     def _add_comment_markers(self):
-        """Add vertical lines at comment timestamps with event names."""
+        """Add comment markers using unified CommentMarkerManager."""
         try:
             # Clear previous markers first
             self._clear_comment_markers()
+            self.marker_manager.clear_all_markers()
 
             # Get data manager and extract intervals
             dm = self.main_window.data_manager
             if not dm or not self.file_path:
                 return
 
-            # Get ECG trace to extract comments
+            # Get ECG trace to extract system intervals
             ecg = dm.get_trace(self.file_path, "ECG")
-            from processing.interval_extractor import extract_event_intervals
-
+            from Pyside.processing.interval_extractor import extract_event_intervals
             intervals = extract_event_intervals([ecg])
-
-            # Extract all comment timestamps with their names
-            comment_data = []
-            for iv in intervals:
-                event_name = iv.get("evento", "Event")
-
-                if iv.get("t_evento"):
-                    comment_data.append((iv.get("t_evento"), f"{event_name} Start"))
-                if iv.get("t_recovery"):
-                    comment_data.append(
-                        (iv.get("t_recovery"), f"{event_name} Recovery")
-                    )
-                if iv.get("t_tilt_down"):
-                    comment_data.append((iv.get("t_tilt_down"), f"{event_name} End"))
-                if iv.get("t_baseline"):
-                    comment_data.append(
-                        (iv.get("t_baseline"), f"{event_name} Baseline")
-                    )
-
-            # Remove duplicates by timestamp
-            comment_dict = {}
-            for timestamp, label in comment_data:
-                if timestamp is not None:
-                    if timestamp not in comment_dict:
-                        comment_dict[timestamp] = []
-                    comment_dict[timestamp].append(label)
 
             # Get current time range
             current_start = self.scrollbar.value()
             current_end = current_start + self.chunk_size
 
-            print(
-                f"[ViewerTab] Current range: {current_start}-{current_end}, Found {len(comment_dict)} comment timestamps"
-            )
-            for ts, labels in comment_dict.items():
-                print(f"  Timestamp {ts}: {labels}")
+            # Create subplot dictionary for CommentMarkerManager
+            plot_dict = {}
+            for i, plot in enumerate(self.plots):
+                signal_name = self.target_signals[i] if i < len(self.target_signals) else f"Plot_{i}"
+                plot_dict[signal_name] = plot
 
-            # Add vertical lines to all plots
-            markers_added = 0
-            for plot in self.plots:
-                for timestamp, labels in comment_dict.items():
-                    if current_start <= timestamp <= current_end:
-                        # Create vertical line
-                        line = pg.InfiniteLine(
-                            pos=timestamp,
-                            angle=90,
-                            pen=pg.mkPen(
-                                "#ff9500", width=1, style=pg.QtCore.Qt.DashLine
-                            ),
-                            label=" | ".join(labels),  # Combine multiple labels
-                            labelOpts={
-                                "position": 0.95,
-                                "color": "#ff9500",
-                                "fill": (255, 149, 0, 50),
-                            },
+            # Add system interval markers using unified manager
+            self.marker_manager.add_markers_to_subplots(
+                plot_dict, intervals, current_start, current_end
+            )
+
+            # Load and add user comments
+            user_comments = self._load_user_comments()
+            if user_comments:
+                # Convert user comments to interval format for marker manager
+                user_intervals = []
+                for comment in user_comments:
+                    if current_start <= comment.timestamp <= current_end:
+                        user_interval = {
+                            'evento': f"User: {comment.comment[:30]}{'...' if len(comment.comment) > 30 else ''}",
+                            't_evento': comment.timestamp,
+                            'comment_type': comment.comment_type,
+                            'is_user_comment': True
+                        }
+                        user_intervals.append(user_interval)
+                
+                # Add user comment markers with different styling
+                if user_intervals:
+                    for signal_name, plot in plot_dict.items():
+                        self.marker_manager.add_markers_to_single_plot(
+                            plot, user_intervals, current_start, current_end, f"{signal_name}_user_comments"
                         )
-                        line.setZValue(1)  # Behind data but visible
-                        plot.addItem(line)
-                        # Track the marker for cleanup
-                        if plot not in self.comment_markers:
-                            self.comment_markers[plot] = []
-                        self.comment_markers[plot].append(line)
-                        markers_added += 1
 
-            print(
-                f"[ViewerTab] Added {markers_added} markers across {len(self.plots)} plots"
-            )
+            self.logger.debug(f"Added markers for range {current_start}-{current_end}: {len(intervals)} intervals, {len(user_comments)} user comments")
 
         except Exception as e:
-            print(f"[ViewerTab] Error adding comment markers: {e}")
-            # Silent fail - comment markers are optional
-            pass
+            self.logger.error(f"Error adding comment markers: {e}")
+    
+    def _load_user_comments(self):
+        """Load user comments from file if available."""
+        try:
+            if not self.file_path:
+                return []
+            
+            # Import UserComment class
+            from Pyside.ui.widgets.user_comment_widget import UserComment
+            import json
+            from pathlib import Path
+            
+            # Create comments directory path
+            data_file_path = Path(self.file_path)
+            comments_dir = data_file_path.parent / "comments"
+            comment_file = comments_dir / f"{data_file_path.stem}_comments.json"
+            
+            # If comment file doesn't exist or is empty, return empty list
+            if not comment_file.exists():
+                self.logger.debug(f"No comment file found: {comment_file}")
+                return []
+            
+            # Check if file is empty
+            if comment_file.stat().st_size == 0:
+                self.logger.debug(f"Empty comment file: {comment_file}")
+                return []
+            
+            # Load comments from file
+            with open(comment_file, 'r', encoding='utf-8') as f:
+                comments_data = json.load(f)
+            
+            # Convert to UserComment objects
+            user_comments = []
+            for comment_data in comments_data.get('comments', []):
+                comment = UserComment.from_dict(comment_data)
+                user_comments.append(comment)
+            
+            self.logger.debug(f"Loaded {len(user_comments)} user comments from {comment_file}")
+            return user_comments
+            
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            self.logger.debug(f"No user comments available: {e}")
+            return []
+        except Exception as e:
+            self.logger.warning(f"Error loading user comments: {e}")
+            return []
 
     def on_chunk_size_changed(self, value):
         self.chunk_size = value
@@ -312,3 +399,55 @@ class ViewerTab(QWidget):
         self.request_chunk(self.scrollbar.value())
         # Refresh markers after chunk size change
         self._add_comment_markers()
+    
+    def get_selected_channels(self):
+        """Get the list of currently loaded channel names."""
+        return getattr(self, 'target_signals', [])
+    
+    def update_hr_params(self, new_hr_params):
+        """Update HR_GEN parameters and refresh Y-ranges for HR_GEN signals."""
+        try:
+            old_params = self.hr_params.copy()
+            self.hr_params = new_hr_params.copy()
+            
+            self.logger.debug(f"HR parameters updated from {old_params} to {new_hr_params}")
+            
+            # Check if HR_GEN is in our target signals
+            if hasattr(self, 'target_signals') and 'HR_GEN' in self.target_signals:
+                # Recalculate Y-range for HR_GEN signal with new parameters
+                dm = self.main_window.data_manager
+                try:
+                    sig = dm.get_trace(self.file_path, 'HR_GEN', **self.hr_params)
+                    
+                    # Recalculate global Y-range for HR_GEN
+                    y_data = np.asarray(sig.data)
+                    y_valid = y_data[np.isfinite(y_data)]
+                    
+                    if len(y_valid) > 0:
+                        y_min, y_max = float(np.min(y_valid)), float(np.max(y_valid))
+                        
+                        # Add padding
+                        if y_min != y_max:
+                            y_range = y_max - y_min
+                            padding = y_range * 0.05
+                            y_min -= padding
+                            y_max += padding
+                        else:
+                            padding = max(abs(y_min) * 0.1, 0.1)
+                            y_min -= padding
+                            y_max += padding
+                        
+                        # Update the stored Y-range
+                        self.y_ranges['HR_GEN'] = (y_min, y_max)
+                        self.logger.debug(f"Updated HR_GEN Y-range: [{y_min:.3f}, {y_max:.3f}] with new parameters")
+                    
+                except Exception as e:
+                    self.logger.error(f"Error updating HR_GEN Y-range: {e}")
+                
+                # Trigger a chunk refresh to apply the new parameters
+                if hasattr(self, 'scrollbar') and self.scrollbar:
+                    self.request_chunk(self.scrollbar.value())
+                    self.logger.debug("Refreshed current chunk with new HR parameters")
+            
+        except Exception as e:
+            self.logger.error(f"Error updating HR parameters: {e}")

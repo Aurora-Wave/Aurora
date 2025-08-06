@@ -1,5 +1,5 @@
 import numpy as np
-import logging
+from typing import List
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -13,20 +13,24 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QScrollBar,
     QSizePolicy,
+    QSplitter,
+    QPushButton,
 )
 from PySide6.QtCore import Qt
 import pyqtgraph as pg
+from Pyside.core import get_user_logger, get_current_session
 from Pyside.data.data_manager import DataManager
 from Pyside.processing.interval_extractor import extract_event_intervals
 from Pyside.processing.chunk_loader import ChunkLoader
 from Pyside.core.channel_units import get_channel_label_with_unit
 from Pyside.core.visualization import default_downsampler
 from Pyside.ui.managers import CommentMarkerManager, ScrollbarManager
+from Pyside.ui.widgets.user_comment_widget import UserCommentWidget, UserComment
 
 
-class TiltTab(QWidget):
+class EventTab(QWidget):
     """
-    Tab to visualize tilt events (intervals) across all channels.
+    Tab to visualize events (intervals) across all channels.
     Loads a full 10-minute context window but displays a user-defined chunk size.
     Enables panning across the full context, zoom disabled, synchronized across channels.
     """
@@ -34,7 +38,8 @@ class TiltTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         # Setup logger
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.logger = get_user_logger(self.__class__.__name__)
+        self.session = get_current_session()
 
         # Data attributes
         self.data_manager: DataManager = None
@@ -66,7 +71,11 @@ class TiltTab(QWidget):
         self.plot_curves = {}
 
         # Unified comment marker management
-        self.marker_manager = CommentMarkerManager("TiltTab")
+        self.marker_manager = CommentMarkerManager("EventTab")
+        
+        # User comment management
+        self.user_comment_widget = UserCommentWidget(self)
+        self.user_comments: List[UserComment] = []
 
         self.channel_colors = {
             "ECG": "#ffff00",  # Amarillo
@@ -77,6 +86,9 @@ class TiltTab(QWidget):
 
         # UI setup
         self._setup_ui()
+        
+        # Connect user comment signals
+        self._connect_user_comment_signals()
 
     def _setup_ui(self):
         # Interval table
@@ -98,6 +110,12 @@ class TiltTab(QWidget):
         self.chunk_spin.setRange(1, 600)
         self.chunk_spin.setValue(int(self._chunk_size))
         self.chunk_spin.valueChanged.connect(self._on_chunk_changed)
+        
+        # Show all comments button
+        self.show_all_comments_btn = QPushButton("Show All Comments")
+        self.show_all_comments_btn.setToolTip("Display all comments from the signal file")
+        self.show_all_comments_btn.clicked.connect(self._show_all_comments)
+        self._showing_all_comments = False
 
         self.scrollbar = QScrollBar(Qt.Horizontal)
         self.scrollbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -107,6 +125,7 @@ class TiltTab(QWidget):
         ctrl.addWidget(QLabel("Search:"))
         ctrl.addWidget(self.filter_box)
         ctrl.addStretch()
+        ctrl.addWidget(self.show_all_comments_btn)
         ctrl.addWidget(QLabel("Chunk:"))
         ctrl.addWidget(self.chunk_spin)
 
@@ -117,42 +136,121 @@ class TiltTab(QWidget):
         # Plot area
         self.plot_widget = pg.GraphicsLayoutWidget()
 
-        # Main layout
+        # Main layout with splitters for resizable sections
         layout = QVBoxLayout(self)
         layout.addLayout(ctrl)
-        layout.addWidget(self.table, stretch=1)
-        layout.addWidget(self.plot_widget, stretch=3)
+        
+        # Create horizontal splitter for table and comment widget
+        table_splitter = QSplitter(Qt.Horizontal)
+        table_splitter.addWidget(self.table)
+        table_splitter.addWidget(self.user_comment_widget)
+        table_splitter.setStretchFactor(0, 2)  # Table gets more space
+        table_splitter.setStretchFactor(1, 1)  # Comment widget gets less space
+        
+        # Create vertical splitter for table/comments and plot
+        main_splitter = QSplitter(Qt.Vertical)
+        main_splitter.addWidget(table_splitter)
+        main_splitter.addWidget(self.plot_widget)
+        main_splitter.setStretchFactor(0, 1)  # Table/comments section
+        main_splitter.setStretchFactor(1, 3)  # Plot section gets more space
+        
+        layout.addWidget(main_splitter)
+    
+    def _connect_user_comment_signals(self):
+        """Connect user comment widget signals for plot updates."""
+        self.user_comment_widget.comments_changed.connect(self._on_user_comments_changed)
+        self.user_comment_widget.comment_added.connect(self._on_user_comment_added)
+    
+    def _on_user_comments_changed(self, comments: List[UserComment]):
+        """Handle user comments changes and update plot markers."""
+        self.user_comments = comments
+        self._update_plot_markers()
+    
+    def _on_user_comment_added(self, comment: UserComment):
+        """Handle new user comment and provide feedback."""
+        self.logger.info(f"User comment added: {comment}")
+        # The comments_changed signal will handle the plot update
+    
+    def _update_plot_markers(self):
+        """Update plot markers to include both system intervals and user comments."""
+        if not hasattr(self, 'subplot_items') or not self.subplot_items:
+            return
+            
+        try:
+            # Get current time range for filtering comments
+            start_time = self._context_start + self._offset
+            end_time = start_time + self._chunk_size
+            
+            # Clear existing markers before updating
+            self.marker_manager.clear_all_markers()
+            
+            # Filter system intervals to current time range for performance
+            relevant_intervals = [
+                iv for iv in self.intervals
+                if any(start_time <= ts <= end_time for ts in [
+                    iv.get('t_evento'), iv.get('t_baseline'), 
+                    iv.get('t_recovery'), iv.get('t_tilt_down')
+                ] if ts is not None)
+            ]
+            
+            # Add system interval markers using unified manager (only relevant ones)
+            if relevant_intervals:
+                self.marker_manager.add_markers_to_subplots(
+                    self.subplot_items, relevant_intervals, start_time, end_time
+                )
+            
+            # Filter user comments to current time range
+            relevant_comments = [
+                comment for comment in self.user_comments
+                if start_time <= comment.timestamp <= end_time
+            ]
+            
+            if relevant_comments:
+                # Convert user comments to marker format compatible with CommentMarkerManager
+                user_intervals = []
+                for comment in relevant_comments:
+                    user_interval = {
+                        'evento': f"User: {comment.comment[:30]}{'...' if len(comment.comment) > 30 else ''}",
+                        't_evento': comment.timestamp,
+                        'comment_type': comment.comment_type,
+                        'is_user_comment': True
+                    }
+                    user_intervals.append(user_interval)
+                
+                # Add user comment markers with different visual style
+                for channel, subplot in self.subplot_items.items():
+                    self.marker_manager.add_markers_to_single_plot(
+                        subplot, user_intervals, start_time, end_time, f"{channel}_user_comments"
+                    )
+            
+            self.logger.debug(f"Updated plot markers in range {start_time:.1f}-{end_time:.1f}s: {len(relevant_intervals)} intervals, {len(relevant_comments)} user comments")
+            
+        except Exception as e:
+            self.logger.warning(f"Error updating plot markers: {e}")
 
     # def update_tilt_tab(self, dm: DataManager, path: str):
-    def update_tilt_tab(self, dm: DataManager, path: str, hr_params: dict):
+    def update_event_tab(self, dm: DataManager, path: str, hr_params: dict):
         # Initialize data manager and path
         self.data_manager = dm
         self.file_path = path
         # Store HR_gen params for later chunk updates
         self.hr_params = hr_params
+        
+        # Set file path in user comment widget for persistence
+        self.user_comment_widget.set_file_path(path)
+        self.session.log_action("Event tab updated with new data", self.logger)
 
         # Determine channels: from metadata + cache (to include HR_gen)
         meta = set(dm.get_available_channels(path))
-        self.logger.info("Triying to update tilt tab with new info")
+        self.logger.info("Trying to update event tab with new info")
         cache = {k.split("|")[0] for k in dm._files[path]["signal_cache"]}
         self.logger.debug(f"cache list of channels {cache}")
         available = meta.union(cache)
         order = ["ECG", "HR_gen", "FBP", "Valsalva"]
         self.channel_names = [ch for ch in order if ch in available]
 
-        # Extract intervals (events)
-        # signals = [dm.get_trace(path, ch) for ch in self.channel_names]
-        # self.intervals = extract_event_intervals(signals)
-        # Extract intervals (events), using hr_params for HR_gen
-        signals = [
-            (
-                dm.get_trace(path, ch, **self.hr_params)
-                if ch.upper() == "HR_GEN"
-                else dm.get_trace(path, ch)
-            )
-            for ch in self.channel_names
-        ]
-        self.intervals = extract_event_intervals(signals)
+        # Extract intervals (events) using cached method from DataManager
+        self.intervals = dm.get_event_intervals(path, self.channel_names, **self.hr_params)
         self._selected_idx = None
         self._selected_idx = None
 
@@ -180,6 +278,19 @@ class TiltTab(QWidget):
         self._request_chunk()
 
     def _populate_table(self):
+        if self._showing_all_comments:
+            self._populate_all_comments_table()
+        else:
+            self._populate_intervals_table()
+        self._apply_filter()
+    
+    def _populate_intervals_table(self):
+        """Populate table with event intervals (default mode)."""
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(
+            ["Event", "Event(s)", "End(s)", "Duration(s)"]
+        )
+        
         self.table.setRowCount(len(self.intervals))
         for i, iv in enumerate(self.intervals):
             t0 = iv.get("t_baseline", iv.get("t_evento", 0.0))
@@ -190,13 +301,143 @@ class TiltTab(QWidget):
             for j, val in enumerate(items):
                 txt = f"{val:.2f}" if isinstance(val, (int, float)) else str(val)
                 self.table.setItem(i, j, QTableWidgetItem(txt))
-        self._apply_filter()
+    
+    def _populate_all_comments_table(self):
+        """Populate table with all signal comments."""
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(
+            ["Time(s)", "Comment", "Channel"]
+        )
+        
+        # Get all comments from DataManager
+        try:
+            all_comments = []
+            if self.data_manager and self.file_path:
+                # Get raw comments from the file
+                file_entry = self.data_manager._files[self.file_path]
+                raw_comments = file_entry.get("comments", [])
+                
+                # Extract all markers from all signals
+                for ch in self.channel_names:
+                    try:
+                        sig = self.data_manager.get_trace(self.file_path, ch)
+                        for marker in getattr(sig, "MarkerData", []):
+                            text = getattr(marker, "text", "") or ""
+                            time = getattr(marker, "time", None)
+                            if text and time is not None:
+                                all_comments.append({
+                                    "time": float(time),
+                                    "text": text,
+                                    "channel": ch
+                                })
+                    except Exception as e:
+                        self.logger.debug(f"Could not get markers from {ch}: {e}")
+                
+                # Also add raw comments if available
+                for comment in raw_comments:
+                    if hasattr(comment, 'time') and hasattr(comment, 'text'):
+                        all_comments.append({
+                            "time": float(comment.time),
+                            "text": comment.text,
+                            "channel": "File"
+                        })
+            
+            # Sort by time
+            all_comments.sort(key=lambda x: x["time"])
+            
+            self.table.setRowCount(len(all_comments))
+            for i, comment in enumerate(all_comments):
+                items = [comment["time"], comment["text"], comment["channel"]]
+                for j, val in enumerate(items):
+                    if j == 0:  # Time column
+                        txt = f"{val:.2f}"
+                    else:
+                        txt = str(val)
+                    self.table.setItem(i, j, QTableWidgetItem(txt))
+            
+            self.logger.debug(f"Displayed {len(all_comments)} comments in table")
+                        
+        except Exception as e:
+            self.logger.error(f"Error populating all comments table: {e}")
+            # Fallback to intervals table
+            self._populate_intervals_table()
+    
+    def _show_all_comments(self):
+        """Toggle between showing intervals and all comments."""
+        self._showing_all_comments = not self._showing_all_comments
+        
+        if self._showing_all_comments:
+            self.show_all_comments_btn.setText("Show Event Intervals")
+            self.show_all_comments_btn.setToolTip("Return to event intervals view")
+            self.logger.info("Switching to all comments view")
+        else:
+            self.show_all_comments_btn.setText("Show All Comments")
+            self.show_all_comments_btn.setToolTip("Display all comments from the signal file")
+            self.logger.info("Switching to event intervals view")
+        
+        # Repopulate the table with new mode
+        self._populate_table()
+    
+    def _navigate_to_time(self, target_time: float):
+        """Navigate to a specific time position."""
+        try:
+            # Calculate the total file duration
+            max_durations = []
+            for ch in self.channel_names:
+                if ch.upper() == "HR_GEN":
+                    sig = self.data_manager.get_trace(self.file_path, ch, **self.hr_params)
+                else:
+                    sig = self.data_manager.get_trace(self.file_path, ch)
+                max_durations.append(max(sig.time))
+            
+            file_duration = max(max_durations)
+            
+            # Set context around the target time
+            margin = self._chunk_size / 2  # Center the target time
+            self._context_start = max(0, target_time - margin)
+            self._context_end = min(file_duration, target_time + margin)
+            
+            # If the context is smaller than chunk size, expand it
+            if (self._context_end - self._context_start) < self._chunk_size:
+                needed = self._chunk_size - (self._context_end - self._context_start)
+                # Try to expand both sides
+                expand_each = needed / 2
+                new_start = max(0, self._context_start - expand_each)
+                new_end = min(file_duration, self._context_end + expand_each)
+                
+                # If we can't expand both sides equally, expand the available side
+                if new_start == 0:
+                    new_end = min(file_duration, self._context_start + self._chunk_size)
+                elif new_end == file_duration:
+                    new_start = max(0, self._context_end - self._chunk_size)
+                
+                self._context_start = new_start
+                self._context_end = new_end
+            
+            # Set offset to show the target time
+            self._offset = max(0, min(target_time - self._context_start - self._chunk_size/2, 
+                                    self._context_end - self._context_start - self._chunk_size))
+            
+            # Update UI
+            self._update_plot_limits()
+            self._setup_scroll()
+            self._request_chunk()
+            
+            self.logger.debug(f"Navigated to time {target_time:.2f}s")
+            
+        except Exception as e:
+            self.logger.error(f"Error navigating to time {target_time}: {e}")
 
     def _apply_filter(self):
         term = self.filter_box.text().lower()
         for r in range(self.table.rowCount()):
-            it = self.table.item(r, 0)
-            hide = term not in (it.text().lower() if it else "")
+            # Check multiple columns for the search term
+            hide = True
+            for c in range(self.table.columnCount()):
+                item = self.table.item(r, c)
+                if item and term in item.text().lower():
+                    hide = False
+                    break
             self.table.setRowHidden(r, hide)
 
     def _setup_scroll(self):
@@ -366,6 +607,9 @@ class TiltTab(QWidget):
                 except Exception as e:
                     self.logger.warning(f"Error updating channel {ch}: {e}")
                     continue
+            
+            # Update markers after chunk data is loaded
+            self._update_plot_markers()
 
         except Exception as e:
             self.logger.error(f"Error in _update_chunk: {e}")
@@ -415,10 +659,8 @@ class TiltTab(QWidget):
             for subplot in list(self.subplot_items.values())[1:]:
                 subplot.setXLink(reference_plot)
 
-        # Add comment markers to all subplots using unified manager
-        self.marker_manager.add_markers_to_subplots(
-            self.subplot_items, self.intervals, self._context_start, self._context_end
-        )
+        # Add comment markers (both system intervals and user comments)
+        self._update_plot_markers()
 
     def _create_global_wheel_handler(self):
         """Create a wheel handler that works across all subplots."""
@@ -445,6 +687,20 @@ class TiltTab(QWidget):
             subplot.setXRange(current_start, current_end, padding=0)
 
     def _on_row_selected(self, row, col):
+        # Handle different table modes
+        if self._showing_all_comments:
+            # In comments mode, navigate to the comment time
+            time_item = self.table.item(row, 0)  # Time is in first column
+            if time_item:
+                try:
+                    comment_time = float(time_item.text())
+                    self._navigate_to_time(comment_time)
+                    self.logger.debug(f"Navigated to comment at {comment_time:.2f}s")
+                except ValueError:
+                    self.logger.warning(f"Could not parse time from row {row}")
+            return
+        
+        # Original intervals mode behavior
         self._selected_idx = row
         iv = self.intervals[row]
         evt = iv.get("t_evento", 0)
@@ -502,3 +758,23 @@ class TiltTab(QWidget):
         self._update_plot_limits()  # Actualizar límites de subplots
         self._setup_scroll()
         self._request_chunk()
+    
+    def update_hr_params(self, new_hr_params):
+        """Update HR_GEN parameters and refresh display if needed."""
+        try:
+            old_params = self.hr_params.copy()
+            self.hr_params = new_hr_params.copy()
+            
+            self.logger.debug(f"EventTab HR parameters updated from {old_params} to {new_hr_params}")
+            
+            # Check if HR_GEN is in our channels and we have valid data
+            if (hasattr(self, 'channel_names') and 'HR_GEN' in self.channel_names 
+                and hasattr(self, 'data_manager') and self.data_manager):
+                
+                # Refresh the current display with new HR parameters
+                if hasattr(self, '_selected_idx') and self._selected_idx is not None:
+                    self._request_chunk()  # This will use the updated hr_params
+                    self.logger.debug("Refreshed EventTab display with new HR parameters")
+                    
+        except Exception as e:
+            self.logger.error(f"Error updating EventTab HR parameters: {e}")

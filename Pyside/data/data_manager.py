@@ -1,12 +1,11 @@
 import os
-import logging
 from collections import deque
+from Pyside.core import get_user_logger, get_current_session
+from Pyside.core.config_manager import get_config_manager
 from Pyside.data.aditch_loader import AditchLoader
 
 
 # from .edf_loader import EDFLoader
-
-MAX_HR_CACHE = 5  # Maximum HR_gen configurations to cache
 
 
 class DataManager:
@@ -16,7 +15,9 @@ class DataManager:
             ".adicht": AditchLoader,
             # ".edf": EDFLoader,
         }
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_user_logger(self.__class__.__name__)
+        self.session = get_current_session()
+        self.config_manager = get_config_manager()
 
     def load_file(self, path: str):
         """
@@ -30,14 +31,18 @@ class DataManager:
 
         loader = self._loader_registry[ext]()
         loader.load(path)
+        self.session.log_action(f"File loaded by DataManager: {os.path.basename(path)}", self.logger)
         # Initialize caches and metadata for this file
+        max_hr_cache = self.config_manager.get_hr_cache_size()
         self._files[path] = {
             "loader": loader,
             "signal_cache": {},
             "metadata": loader.get_metadata(),
             "comments": loader.get_all_comments(),
             "hr_cache": {},  # dict: key (config tuple) -> Signal
-            "hr_cache_keys": deque(maxlen=MAX_HR_CACHE),  # order of keys for eviction
+            "hr_cache_keys": deque(maxlen=max_hr_cache),  # order of keys for eviction
+            "intervals_cache": None,  # Cache for extracted intervals
+            "intervals_cache_key": None,  # Key for cache invalidation
         }
         # If the file already has HR_gen, cache it as canonical
         if "HR_gen" in self._files[path]["metadata"].get("channels", []):
@@ -67,7 +72,8 @@ class DataManager:
             hr_cache[key] = sig
             hr_keys.append(key)
             # Enforce cache size
-            while len(hr_keys) > MAX_HR_CACHE:
+            max_hr_cache = self.config_manager.get_hr_cache_size()
+            while len(hr_keys) > max_hr_cache:
                 old_key = hr_keys.popleft()
                 hr_cache.pop(old_key, None)
 
@@ -110,17 +116,26 @@ class DataManager:
         """
         Check if current configuration matches the default for HR_gen.
         """
-        # Define the default config here
-        defaults = {
-            "wavelet": "db3",
-            "swt_level": 3,
-            "min_rr_sec": 0.4,
-            # Add other defaults if needed
-        }
+        # Get defaults from centralized config
+        defaults = self.config_manager.get_default_hr_config()
+        
         # If no params, treat as default
         if not kwargs:
             return True
-        return all(kwargs.get(k, defaults[k]) == defaults[k] for k in defaults)
+            
+        # Check if all provided parameters match defaults
+        # Handle both 'level' and 'swt_level' parameter names
+        for key, value in kwargs.items():
+            if key == "swt_level":
+                # Check against both 'level' and 'swt_level' in defaults
+                default_val = defaults.get("swt_level", defaults.get("level", 4))
+            else:
+                default_val = defaults.get(key)
+            
+            if default_val is None or value != default_val:
+                return False
+        
+        return True
 
     def get_comments(self, path: str):
         """
@@ -146,6 +161,37 @@ class DataManager:
             computed_channels.append("HR_gen")
 
         return base_channels + computed_channels
+    
+    def get_available_channels_for_export(self, path: str):
+        """
+        List available channels for export, including distinct HR_gen configurations.
+        """
+        base_channels = self._files[path]["metadata"].get("channels", [])
+        
+        # Get all non-HR_gen channels
+        export_channels = [ch for ch in base_channels if ch.upper() != "HR_GEN"]
+        
+        # Add available HR_gen configurations with descriptive names
+        if "ECG" in base_channels:
+            entry = self._files[path]
+            hr_cache = entry.get("hr_cache", {})
+            
+            if hr_cache:
+                # Add each cached HR configuration with descriptive name
+                for hr_config_key in hr_cache.keys():
+                    # Convert config key to descriptive name
+                    config_dict = dict(hr_config_key)
+                    wavelet = config_dict.get("wavelet", "haar")
+                    level = config_dict.get("swt_level", config_dict.get("level", 4))
+                    min_rr = config_dict.get("min_rr_sec", 0.6)
+                    
+                    descriptive_name = f"HR_gen_{wavelet}_lv{level}_rr{min_rr}"
+                    export_channels.append(descriptive_name)
+            else:
+                # No cached configurations, add generic HR_gen
+                export_channels.append("HR_gen")
+        
+        return export_channels
 
     def unload_file(self, path: str):
         """
@@ -182,3 +228,70 @@ class DataManager:
             entry["hr_cache_keys"].remove(key)
         entry["hr_cache_keys"].append(key)
         self.logger.info(f"Updating HR_cache with key {key}")
+    
+    def get_event_intervals(self, path, channel_names=None, **hr_params):
+        """
+        Get event intervals with caching support.
+        
+        Args:
+            path: File path
+            channel_names: List of channel names to analyze
+            **hr_params: HR generation parameters for cache key
+            
+        Returns:
+            List of interval dictionaries
+        """
+        from Pyside.processing.interval_extractor import extract_event_intervals
+        import os
+        
+        if path not in self._files:
+            raise ValueError(f"File {path} not loaded")
+            
+        entry = self._files[path]
+        
+        # Use default channels if none specified
+        if channel_names is None:
+            available = set(self.get_available_channels(path))
+            if "HR_gen" in {k.split("|")[0] for k in entry["signal_cache"]}:
+                available.add("HR_gen")
+            channel_names = [ch for ch in ["ECG", "HR_gen", "FBP", "Valsalva"] if ch in available]
+        
+        # Create cache key based on channels and HR parameters
+        cache_key = (tuple(sorted(channel_names)), tuple(sorted(hr_params.items())))
+        
+        # Check if cached intervals are valid
+        if (entry["intervals_cache"] is not None and 
+            entry["intervals_cache_key"] == cache_key):
+            self.logger.debug(f"Using cached intervals for {os.path.basename(path)}")
+            return entry["intervals_cache"]
+        
+        # Extract intervals and cache them
+        self.logger.debug(f"Extracting intervals for {os.path.basename(path)} with channels {channel_names}")
+        signals = []
+        for ch in channel_names:
+            if ch.upper() == "HR_GEN":
+                sig = self.get_trace(path, ch, **hr_params)
+            else:
+                sig = self.get_trace(path, ch)
+            signals.append(sig)
+        
+        intervals = extract_event_intervals(signals)
+        
+        # Cache the results
+        entry["intervals_cache"] = intervals
+        entry["intervals_cache_key"] = cache_key
+        
+        self.logger.debug(f"Cached {len(intervals)} intervals for {os.path.basename(path)}")
+        return intervals
+    
+    def clear_intervals_cache(self, path):
+        """Clear intervals cache for a specific file."""
+        if path in self._files:
+            self._files[path]["intervals_cache"] = None
+            self._files[path]["intervals_cache_key"] = None
+            self.logger.debug(f"Cleared intervals cache for {os.path.basename(path)}")
+    
+    def clear_all_intervals_cache(self):
+        """Clear intervals cache for all files."""
+        for path in self._files:
+            self.clear_intervals_cache(path)

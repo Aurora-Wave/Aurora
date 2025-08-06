@@ -1,5 +1,3 @@
-/dash/
-
 #Ignore Virtual Environment 
 env/
 .env/
@@ -8,15 +6,11 @@ venv/
 
 #VScode config
 .vscode/
-
-
-
-
 # Build apps
 build
-
 # Cache
 __pycache__/
-
-#Log info
+# Log files and user config
 logs/
+config/*.json
+!config/default_*.json

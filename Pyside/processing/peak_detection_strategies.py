@@ -9,8 +9,9 @@ import numpy as np
 import pywt
 import warnings
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, List
 from scipy.signal import find_peaks
+from Pyside.core.config_manager import get_config_manager
 
 
 class PeakDetectionStrategy(ABC):
@@ -67,6 +68,9 @@ class WaveletSWTStrategy(PeakDetectionStrategy):
     Best for noisy signals where precise peak timing is critical.
     """
     
+    def __init__(self):
+        self.config_manager = get_config_manager()
+    
     @property
     def name(self) -> str:
         return "swt"
@@ -76,11 +80,7 @@ class WaveletSWTStrategy(PeakDetectionStrategy):
         return "Stationary Wavelet Transform - translation-invariant, robust for noisy signals"
     
     def get_default_params(self) -> Dict[str, Any]:
-        return {
-            "wavelet": "db3",
-            "level": 4,
-            "min_rr_sec": 0.4
-        }
+        return self.config_manager.get_peak_detection_defaults("swt")
     
     def detect_peaks(self, ecg_signal: np.ndarray, fs: float, **kwargs) -> np.ndarray:
         """
@@ -132,6 +132,9 @@ class WaveletDWTStrategy(PeakDetectionStrategy):
     Fastest method with good baseline performance.
     """
     
+    def __init__(self):
+        self.config_manager = get_config_manager()
+    
     @property
     def name(self) -> str:
         return "dwt"
@@ -141,11 +144,7 @@ class WaveletDWTStrategy(PeakDetectionStrategy):
         return "Discrete Wavelet Transform - efficient, good baseline performance"
     
     def get_default_params(self) -> Dict[str, Any]:
-        return {
-            "wavelet": "haar", 
-            "level": 5,
-            "min_rr_sec": 0.4
-        }
+        return self.config_manager.get_peak_detection_defaults("dwt")
     
     def detect_peaks(self, ecg_signal: np.ndarray, fs: float, **kwargs) -> np.ndarray:
         """
@@ -191,6 +190,9 @@ class WaveletCWTStrategy(PeakDetectionStrategy):
     Best accuracy for R-peak detection, especially in challenging signals.
     """
     
+    def __init__(self):
+        self.config_manager = get_config_manager()
+    
     @property
     def name(self) -> str:
         return "cwt"
@@ -200,11 +202,7 @@ class WaveletCWTStrategy(PeakDetectionStrategy):
         return "Continuous Wavelet Transform - best time-frequency resolution and accuracy"
     
     def get_default_params(self) -> Dict[str, Any]:
-        return {
-            "wavelet": "haar",  # Haar wavelet for CWT
-            "scales": None,  # Auto-calculated based on expected QRS duration
-            "min_rr_sec": 0.4
-        }
+        return self.config_manager.get_peak_detection_defaults("cwt")
     
     def _calculate_scales(self, fs: float) -> np.ndarray:
         """
@@ -322,11 +320,13 @@ class NeuroKit2Strategy(PeakDetectionStrategy):
         return f"NeuroKit2 {self.method} detector - professional-grade ECG analysis"
     
     def get_default_params(self) -> Dict[str, Any]:
+        config_manager = get_config_manager()
+        neurokit2_defaults = config_manager.get_peak_detection_defaults("neurokit2")
         return {
             "method": self.method,
             "sampling_rate": None,  # Will use fs from detect_peaks
             "show": False,
-            "correct_artifacts": False
+            "correct_artifacts": neurokit2_defaults.get("correct_artifacts", False)
         }
     
     def detect_peaks(self, ecg_signal: np.ndarray, fs: float, **kwargs) -> np.ndarray:

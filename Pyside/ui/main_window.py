@@ -1,11 +1,5 @@
-import json
-import unicodedata
 import os
-import csv
-import logging
-import numpy as np
-import sys
-import traceback
+
 from PySide6.QtWidgets import (
     QMainWindow,
     QFileDialog,
@@ -15,29 +9,22 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QTimer
+
 from Pyside.data.data_manager import DataManager
 from Pyside.ui.viewer_tab import ViewerTab
 from Pyside.ui.analysis_tab import AnalysisTab
-from Pyside.ui.tilt_tab import TiltTab
+from Pyside.ui.event_tab import EventTab
 from Pyside.ui.widgets.channel_selection_dialog import ChannelSelectionDialog
 from Pyside.ui.widgets.export_selection_dialog import ExportSelectionDialog
-from Pyside.ui.utils.error_handler import error_handler
+from Pyside.core import get_user_logger, get_current_session, get_config_manager
 from Pyside.processing.interval_extractor import extract_event_intervals
 from Pyside.processing.csv_exporter import CSVExporter
 
-# Configure logging for debugging
-logging.basicConfig(level=logging.DEBUG)
+# Logging now handled by unified system in core.logging_config
 
 # Suprimir warnings específicos de pyqtgraph
 import warnings
-
 warnings.filterwarnings("ignore", "overflow encountered in cast", RuntimeWarning)
-
-
-# Signals configuration path
-CONFIG_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "config", "signals_config.json")
-)
 
 
 class MainWindow(QMainWindow):
@@ -50,12 +37,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("AuroraWave")
         #self.setMinimumSize(1200, 800)
 
-        # Configurar error handler global PRIMERO
-        error_handler.install_global_handler(self)
-        self.logger = error_handler.logger
+        # Initialize logging with user context
+        self.logger = get_user_logger(self.__class__.__name__)
+        self.session = get_current_session()
+        self.session.log_action("MainWindow initialized", self.logger)
 
-        # Setup logger con configuración mejorada
-        self.logger.debug(f"USER SIGNALS PREFERENCE CONFIG_PATH: {CONFIG_PATH}")
+        # Initialize configuration manager
+        self.config_manager = get_config_manager()
+        self.logger.info("MainWindow initialization started")
 
         # Data manager and current file
         self.data_manager = DataManager()
@@ -67,10 +56,10 @@ class MainWindow(QMainWindow):
         self.tab_widget.tabCloseRequested.connect(self._close_tab)
         self.setCentralWidget(self.tab_widget)
 
-        # Tilt and Analysis tabs
-        self.tilt_tab = TiltTab(self)
+        # Event(Tilt) and Analysis tabs
+        self.event_tab = EventTab(self)
         self.analysis_tab = AnalysisTab(self)
-        self.tab_widget.addTab(self.tilt_tab, "Tilt Protocol")
+        self.tab_widget.addTab(self.event_tab, "Event Analysis")
         self.tab_widget.addTab(self.analysis_tab, "Signal Analysis")
 
         # Menubar
@@ -84,18 +73,21 @@ class MainWindow(QMainWindow):
         self.health_timer.timeout.connect(self._check_application_health)
         self.health_timer.start(30000)  # Verificar cada 30 segundos
 
-        # Attempt to load last session config
-        self._load_config_if_exists()
+        # Apply startup configuration (load last session)
+        self._apply_startup_configuration()
+        
+        self.session.log_action("MainWindow setup complete", self.logger)
 
     # Menubar definition
-    def _init_menubar(self):
-        menu_bar = self.menuBar()
-        file_menu = menu_bar.addMenu("Files")
-        export_menu = menu_bar.addMenu("Export")
-        # FIXME Conectar widget de exportacion
-        # export_menu.addAction("Exportar marcadores", self.export_markers)
+    # def _init_menubar(self):
+    #    menu_bar = self.menuBar()
+    #    file_menu = menu_bar.addMenu("Files")
+    #    export_menu = menu_bar.addMenu("Export")
+    #    # FIXME Conectar widget de exportacion
+    #    # export_menu.addAction("Exportar marcadores", self.export_markers)
 
     # Toolbar definition
+    # FIXME Mover los componentes de la toolbar a Menubar
     def _init_toolbar(self):
         toolbar = QToolBar("Main Toolbar", self)
         self.addToolBar(toolbar)
@@ -108,57 +100,15 @@ class MainWindow(QMainWindow):
         export_act.triggered.connect(self._export_csv)
         toolbar.addAction(export_act)
 
-    # Preference config
-    def _load_config_if_exists(self):
-        """Attempt to load configuration and apply default file and signals."""
-        self.logger.info("Attempting to load configuration file...")
-        if not os.path.exists(CONFIG_PATH):
-            self.logger.warning(f"Configuration file not found at {CONFIG_PATH}")
-            return
+    def _apply_startup_configuration(self):
+        """Apply saved configuration at startup."""
         try:
-            with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
-                cfg = json.load(f)
-                self.logger.debug(f"Configuration loaded: {cfg}")
+            self.logger.info("Applying startup configuration...")
+            success = self.config_manager.apply_startup_configuration(self)
+            if not success:
+                self.logger.debug("No valid startup configuration found or applied")
         except Exception as e:
-            self.logger.error(f"Error reading config file: {e}", exc_info=True)
-            return
-
-        fp = cfg.get("file_path")
-        defaults = cfg.get("default_signals", [])
-
-        if isinstance(fp, str):
-            # Normalize path separators
-            fp = os.path.normpath(fp)
-            # If the path is relative, resolve it against the config directory
-            if not os.path.isabs(fp):
-                base_dir = os.path.dirname(CONFIG_PATH)
-                fp = os.path.normpath(os.path.join(base_dir, fp))
-            # Normalize unicode form to match filesystem
-            fp = unicodedata.normalize("NFC", fp)
-
-        self.logger.debug(f"Resolved file_path: {fp}")
-        self.logger.debug(f"Configured default_signals: {defaults}")
-
-        if fp and os.path.exists(fp):
-            try:
-                self.logger.info(f"Loading file from config: {fp}")
-                self.data_manager.load_file(fp)  # Load the file
-                self.current_file = fp
-                if defaults:
-                    self.logger.info("Updating tabs with default signals...")
-                    self.update_tabs(defaults)
-            except Exception as e:
-                self.logger.error(
-                    f"Failed to load or update from config: {e}", exc_info=True
-                )
-                # Mostrar error al usuario pero no cerrar la aplicación
-                QMessageBox.warning(
-                    self,
-                    "Error de Configuración",
-                    f"No se pudo cargar el archivo configurado:\n{fp}\n\nError: {str(e)}",
-                )
-        else:
-            self.logger.debug(f"Configured file path does not exist: {fp}")
+            self.logger.error(f"Failed to apply startup configuration: {e}", exc_info=True)
 
     def _check_application_health(self):
         """Verificación periódica del estado de la aplicación."""
@@ -197,7 +147,12 @@ class MainWindow(QMainWindow):
 
     def _load_file_dialog(self):
         """Open a file dialog to select a signal file and load it."""
-        return error_handler.safe_execute(self._load_file_dialog_impl, "Cargar Archivo")
+        try:
+            self.session.log_action("File loading dialog requested", self.logger)
+            return self._load_file_dialog_impl()
+        except Exception as e:
+            self.logger.error(f"File loading failed: {e}", exc_info=True)
+            return None
 
     def _load_file_dialog_impl(self):
         """Implementación protegida de carga de archivos."""
@@ -210,9 +165,11 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
+            self.session.log_action(f"File selected: {os.path.basename(path)}", self.logger)
             self.logger.info(f"DataManager trying to open a file at {path}")
             self.data_manager.load_file(path)
             self.current_file = path
+            self.session.log_action(f"File loaded successfully: {os.path.basename(path)}", self.logger)
             meta = self.data_manager.get_metadata(path)
             channels = meta.get("channels", [])
             if not channels:
@@ -220,17 +177,60 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "No Channels", "No channels found in file.")
                 return
 
-            dlg = ChannelSelectionDialog(channels, self)
+            # Always include HR_GEN in the channel selection, even if not yet generated
+            channels_for_selection = channels.copy()
+            if "HR_GEN" not in channels_for_selection:
+                channels_for_selection.append("HR_GEN")
+                self.logger.debug("Added HR_GEN to channel selection (not yet generated)")
+
+            dlg = ChannelSelectionDialog(channels_for_selection, self, existing_channels=channels)
             if not dlg.exec():
                 return
             selected = dlg.get_selected_channels()
+            self.session.log_action(f"Channels selected: {selected}", self.logger)
             self.logger.info(
                 f"{selected} channels selected for visualization on ViewerTab"
             )
             if not selected:
                 QMessageBox.information(self, "No Selection", "No channels selected.")
                 return
+            
+            # Generate HR_GEN if selected but doesn't exist in the original file
+            if "HR_GEN" in selected and "HR_GEN" not in channels:
+                self.logger.info("HR_GEN selected but not found in file. Generating with analysis tab default parameters...")
+                try:
+                    # Generate HR_GEN with analysis tab default parameters for consistency
+                    analysis_settings = self.config_manager.get_analysis_settings()
+                    hr_params = {
+                        "wavelet": analysis_settings.get("wavelet", "haar"),
+                        "swt_level": analysis_settings.get("level", 4),
+                        "min_rr_sec": analysis_settings.get("min_rr_sec", 0.6)
+                    }
+                    self.logger.debug(f"Using HR generation parameters: {hr_params}")
+                    hr_signal = self.data_manager.get_trace(path, "HR_GEN", **hr_params)
+                    self.logger.info("HR_GEN generated successfully and added to file metadata")
+                    self.session.log_action(f"HR_GEN generated at startup with params: {hr_params}", self.logger)
+                except Exception as e:
+                    self.logger.error(f"Failed to generate HR_GEN: {e}")
+                    QMessageBox.warning(
+                        self, 
+                        "HR Generation Failed", 
+                        f"Could not generate HR_GEN signal: {str(e)}\n\nProceeding without HR_GEN."
+                    )
+                    # Remove HR_GEN from selected channels since generation failed
+                    selected = [ch for ch in selected if ch != "HR_GEN"]
+                    if not selected:
+                        QMessageBox.information(self, "No Selection", "No valid channels selected.")
+                        return
+
             self.update_tabs(selected)
+            
+            # Save the new file and channel selection to configuration
+            self.config_manager.set_last_file_path(path)
+            self.config_manager.set_default_signals(selected)
+            self.config_manager.save_config()
+            self.logger.debug("Configuration updated and saved")
+            
         except Exception as e:
             self.logger.critical(f"Failed to load file: {e}", exc_info=True)
             QMessageBox.critical(self, "Load Error", f"Failed to load file: {e}")
@@ -238,9 +238,12 @@ class MainWindow(QMainWindow):
     def update_tabs(self, selected_channels):
         # FIXME Arreglar para que ViewerTab se inicie vacia igual que las otras y luego se actualice
         """Create and insert ViewerTab, and update Tilt and Analysis tabs."""
-        return error_handler.safe_execute(
-            self._update_tabs_impl, "Actualizar Tabs", selected_channels
-        )
+        try:
+            self.logger.info(f"Updating tabs with {len(selected_channels)} selected channels")
+            return self._update_tabs_impl(selected_channels)
+        except Exception as e:
+            self.logger.error(f"Tab update failed: {e}", exc_info=True)
+            return None
 
     def _update_tabs_impl(self, selected_channels):
         """Implementación protegida de actualización de tabs."""
@@ -266,12 +269,41 @@ class MainWindow(QMainWindow):
 
         # First update AnalysisTab so its hr_params are up-to-date
         self.analysis_tab.update_analysis_tab(self.data_manager, path)
-        # Then pass those hr_params into TiltTab
-        self.tilt_tab.update_tilt_tab(self.data_manager, path, hr_params)
+        # Then pass those hr_params into EventTab
+        self.event_tab.update_event_tab(self.data_manager, path, hr_params)
+    
+    def get_current_hr_params(self):
+        """Get current HR_GEN parameters from Analysis tab."""
+        return self.analysis_tab.get_hrgen_params()
+    
+    def update_viewer_tabs_hr_params(self):
+        """Update HR parameters in all ViewerTab instances when Analysis tab changes."""
+        try:
+            current_hr_params = self.get_current_hr_params()
+            self.logger.debug(f"Updating ViewerTab HR parameters: {current_hr_params}")
+            
+            # Update all ViewerTab instances (excluding Tilt and Analysis tabs)
+            for i in range(self.tab_widget.count()):
+                widget = self.tab_widget.widget(i)
+                if isinstance(widget, ViewerTab):
+                    widget.update_hr_params(current_hr_params)
+                    self.logger.debug(f"Updated HR parameters for ViewerTab at index {i}")
+                    
+            # Also update EventTab if it uses HR_GEN
+            self.event_tab.update_hr_params(current_hr_params)
+            self.logger.debug("Updated HR parameters for EventTab")
+            
+        except Exception as e:
+            self.logger.error(f"Error updating HR parameters across tabs: {e}")
 
     def _export_csv(self):
         """Export selected signal statistics to CSV."""
-        return error_handler.safe_execute(self._export_csv_impl, "Exportar CSV")
+        try:
+            self.session.log_action("CSV export requested", self.logger)
+            return self._export_csv_impl()
+        except Exception as e:
+            self.logger.error(f"CSV export failed: {e}", exc_info=True)
+            return None
 
     def _export_csv_impl(self):
         """Implementación protegida de exportación CSV."""
@@ -280,9 +312,9 @@ class MainWindow(QMainWindow):
             return
 
         path = self.current_file
-        all_signals = self.data_manager.get_available_channels(path)
+        all_signals = self.data_manager.get_available_channels_for_export(path)
 
-        # Crear exporter y extraer tests
+        # Create exporter - it will parse HR parameters from channel names
         exporter = CSVExporter(self.data_manager)
         test_entries = exporter.extract_test_entries(path)
         unique_tests = [entry[0] for entry in test_entries]
@@ -313,6 +345,8 @@ class MainWindow(QMainWindow):
             exporter.export_to_csv(
                 path, sel_signals, sel_tests, test_entries, save_path, segment_duration
             )
+            
+            self.session.log_action(f"CSV export successful: {len(sel_signals)} signals, {len(sel_tests) if sel_tests else 1} tests", self.logger)
 
             QMessageBox.information(
                 self,
@@ -331,7 +365,7 @@ class MainWindow(QMainWindow):
     def _close_tab(self, index):
         """Close the specified tab, unless it's Tilt or Analysis."""
         widget = self.tab_widget.widget(index)
-        if widget in (self.tilt_tab, self.analysis_tab):
+        if widget in (self.event_tab, self.analysis_tab):
             return
         self.tab_widget.removeTab(index)
         widget.deleteLater()
@@ -339,7 +373,12 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Override close event para limpiar recursos."""
         try:
+            duration = self.session.get_session_duration()
+            self.session.log_action(f"Application closing after {duration:.1f}s with {self.session.actions_count} total actions", self.logger)
             self.logger.info("Cerrando aplicación...")
+
+            # Save current session configuration
+            self.config_manager.save_current_session(self)
 
             # Detener timer de salud
             if hasattr(self, "health_timer"):

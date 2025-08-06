@@ -13,18 +13,16 @@ from PySide6.QtWidgets import (
 import pyqtgraph as pg
 from Pyside.processing.chunk_loader import ChunkLoader
 from PySide6.QtCore import Qt
-import logging
+from Pyside.core import get_user_logger, get_current_session
+from Pyside.core.config_manager import get_config_manager
 from Pyside.core.channel_units import get_channel_label_with_unit
+from Pyside.ui.utils.ecg_debug_tracker import ECGDebugTracker
+from Pyside.ui.utils.plot_factory import PlotFactory, SignalProcessor
+from Pyside.ui.managers.comment_marker_manager import CommentMarkerManager
 
 
-def sanitize_for_plot(y, clip=1e6):
-    """Sanitize y-array for plotting: removes inf, nan, and extreme values."""
-    y = np.asarray(y)
-    if not np.all(np.isfinite(y)):
-        y = np.nan_to_num(y, nan=0.0, posinf=clip, neginf=-clip)
-    if np.abs(y).max() > clip:
-        y = np.clip(y, -clip, clip)
-    return y
+# Use SignalProcessor.sanitize_signal_data instead of local function
+sanitize_for_plot = SignalProcessor.sanitize_signal_data
 
 
 class AnalysisTab(QWidget):
@@ -35,18 +33,32 @@ class AnalysisTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_user_logger(self.__class__.__name__)
+        self.session = get_current_session()
+        self.config_manager = get_config_manager()
+        self.main_window = parent  # Reference to MainWindow for parameter synchronization
+        
+        # ECG Debug Tracker for monitoring signal consistency
+        self.ecg_debug_tracker = ECGDebugTracker("AnalysisTab.ECGDebug")
+        
+        # Comment marker manager for unified comment display
+        self.comment_marker_manager = CommentMarkerManager("AnalysisTab")
+        
         self.data_manager = None
         self.file_path = None
         self.fs = 1.0
         self.duration = 0.0
-        self._max_lvl = 5
+        
+        # Get user's saved analysis settings (highest priority)
+        analysis_settings = self.config_manager.get_analysis_settings()
+        ui_limits = self.config_manager.get_ui_limits()
+        self._max_lvl = ui_limits.get("max_wavelet_level", 6)
 
-        # Defaults
-        self.wavelet = "haar"
-        self.level = 4
-        self.min_dist = 0.5
-        self.chunk_size = 60
+        # Initialize from user's analysis settings (these are the ones that persist)
+        self.wavelet = analysis_settings.get("wavelet", "haar")
+        self.level = analysis_settings.get("level", 4)
+        self.min_rr_sec = analysis_settings.get("min_rr_sec", 0.6)
+        self.chunk_size = 60  # UI-specific default
         self.start_time = 0
 
         # Dragging state
@@ -54,7 +66,6 @@ class AnalysisTab(QWidget):
         self._is_dragging = False
 
         # Comment markers tracking
-        self.comment_markers = []
 
         # Layout
         main = QVBoxLayout(self)
@@ -74,17 +85,21 @@ class AnalysisTab(QWidget):
         self.level_sb.valueChanged.connect(self._update)
         ctrl.addWidget(self.level_sb)
 
-        ctrl.addWidget(QLabel("MinDist (s):"))
+        ctrl.addWidget(QLabel("Min R-R Interval (s):"))
         self.dist_sb = QDoubleSpinBox()
-        self.dist_sb.setRange(0.1, 2.0)
+        rr_range = ui_limits.get("min_rr_range", [0.1, 2.0])
+        self.dist_sb.setRange(rr_range[0], rr_range[1])
         self.dist_sb.setSingleStep(0.1)
-        self.dist_sb.setValue(self.min_dist)
+        self.dist_sb.setValue(self.min_rr_sec)
         self.dist_sb.valueChanged.connect(self._update)
         ctrl.addWidget(self.dist_sb)
 
         ctrl.addWidget(QLabel("Chunk (s):"))
         self.chunk_sb = QSpinBox()
-        self.chunk_sb.setRange(1, 600)
+        self.chunk_sb.setRange(
+            ui_limits.get("min_chunk_size", 1), 
+            ui_limits.get("max_chunk_size", 600)
+        )
         self.chunk_sb.setValue(self.chunk_size)
         self.chunk_sb.valueChanged.connect(self._on_chunk_changed)
         ctrl.addWidget(self.chunk_sb)
@@ -105,25 +120,16 @@ class AnalysisTab(QWidget):
 
         main.addLayout(ctrl)
 
-        self.plots = pg.GraphicsLayoutWidget()
-        self.ecg_plot = self.plots.addPlot(row=0, col=0, title="ECG Chunk")
-        self.hr_plot = self.plots.addPlot(row=1, col=0, title="HR_gen Chunk")
-        self.wave_plot = self.plots.addPlot(row=2, col=0, title="Wavelet")
+        # Create plots using PlotFactory for consistency
+        self.plots, plot_dict = PlotFactory.create_analysis_plot_grid()
+        self.ecg_plot = plot_dict['ecg']
+        self.hr_plot = plot_dict['hr']
+        self.wave_plot = plot_dict['wavelet']
 
-        for p in (self.ecg_plot, self.hr_plot, self.wave_plot):
-            p.showGrid(x=True, y=True)
-            p.getViewBox().setMouseEnabled(x=False, y=False)
-
-        self.ecg_plot.getViewBox().setMenuEnabled(False)
-
-        self.ecg_plot.setLabel("bottom", "Time (s)")
-        self.ecg_plot.setLabel("left", get_channel_label_with_unit("ECG"))
-        self.hr_plot.setLabel("bottom", "Time (s)")
-        self.hr_plot.setLabel("left", get_channel_label_with_unit("HR_gen"))
+        
+        # Link HR plot to ECG plot for synchronized panning
         self.hr_plot.setXLink(self.ecg_plot)
-        self.wave_plot.setLabel("bottom", "Units")
-        self.wave_plot.setLabel("left", "Amplitude")
-
+        
         main.addWidget(self.plots)
 
         self.ecg_plot.scene().sigMouseClicked.connect(self._on_ecg_click)
@@ -136,6 +142,9 @@ class AnalysisTab(QWidget):
     def update_analysis_tab(self, data_manager, file_path):
         self.logger.info(f"Updating AnalysisTab for file: {file_path}")
 
+        # Reset ECG debug tracker for new file
+        self.ecg_debug_tracker.reset()
+        
         self.data_manager = data_manager
         self.file_path = file_path
         ecg = self.data_manager.get_trace(file_path, "ECG")
@@ -182,6 +191,25 @@ class AnalysisTab(QWidget):
         )
         t_ecg = np.arange(len(ecg_chunk)) / self.fs + start
         y_ecg = sanitize_for_plot(ecg_chunk)
+        
+        # Debug: Track ECG signal consistency
+        current_parameters = {
+            "wavelet": wav,
+            "level": lvl,
+            "min_rr_sec": md,
+            "chunk_size": chunk,
+            "start_time": start
+        }
+        
+        # Compare with previous state (if available)
+        self.ecg_debug_tracker.compare_ecg_state(
+            ecg_chunk, current_parameters, start, chunk
+        )
+        
+        # Capture current state for next comparison
+        self.ecg_debug_tracker.capture_ecg_state(
+            ecg_chunk, current_parameters, start, chunk
+        )
 
         # HR_gen global (full signal)
         hr_sig = self.data_manager.get_trace(
@@ -263,6 +291,13 @@ class AnalysisTab(QWidget):
 
         # Update comment markers for current chunk
         self._add_comment_markers()
+        
+        # Notify other tabs about HR parameter changes
+        try:
+            if hasattr(self, 'main_window') and self.main_window:
+                self.main_window.update_viewer_tabs_hr_params()
+        except Exception as e:
+            self.logger.error(f"Error notifying other tabs of HR parameter changes: {e}")
 
     # Mouse interaction: click-inicio y click-destino
     def _on_ecg_click(self, event):
@@ -347,6 +382,7 @@ class AnalysisTab(QWidget):
             )
 
             self.logger.info(f"Adding new R-peak at index: {local_max_idx}")
+            self.session.log_action(f"R-peak added at {local_max_idx}", self.logger)
 
             hr_sig.r_peaks = np.sort(np.append(hr_sig.r_peaks, local_max_idx))
             # Update only the segments around the new peak
@@ -384,9 +420,11 @@ class AnalysisTab(QWidget):
         idx_near = np.where(np.abs(hr_sig.r_peaks - global_idx) <= tolerance)[0]
         if idx_near.size:
             peak_idx = idx_near[0]
+            deleted_peak = hr_sig.r_peaks[idx_near[0]]
             hr_sig.r_peaks = np.delete(hr_sig.r_peaks, peak_idx)
 
-            self.logger.info(f"Deleting R-peak at index: {hr_sig.r_peaks[idx_near[0]]}")
+            self.logger.info(f"Deleting R-peak at index: {deleted_peak}")
+            self.session.log_action(f"R-peak deleted at {deleted_peak}", self.logger)
 
             # Update HR around removed peak
             if peak_idx > 0:
@@ -407,86 +445,34 @@ class AnalysisTab(QWidget):
     def get_hrgen_params(self):
         return {
             "wavelet": self.wavelet_cb.currentText(),
-            "swt_level": self.level_sb.value(),
+            "level": self.level_sb.value(),
             "min_rr_sec": self.dist_sb.value(),
         }
 
-    def _clear_comment_markers(self):
-        """Clear all existing comment markers from plots."""
-        for marker in self.comment_markers:
-            try:
-                # Remove marker from its parent plot
-                if marker.parentItem():
-                    marker.parentItem().removeItem(marker)
-            except RuntimeError:
-                # Marker may already be deleted
-                pass
-        self.comment_markers.clear()
-
     def _add_comment_markers(self):
-        """Add vertical lines at comment timestamps with event names."""
+        """Add comment markers using the unified CommentMarkerManager."""
         try:
-            # Clear previous markers first
-            self._clear_comment_markers()
-
-            # Get ECG trace to extract comments
+            # Get ECG trace to extract intervals
             ecg = self.data_manager.get_trace(self.file_path, "ECG")
             from processing.interval_extractor import extract_event_intervals
-
             intervals = extract_event_intervals([ecg])
-
-            # Extract all comment timestamps with their names
-            comment_data = []
-            for iv in intervals:
-                event_name = iv.get("evento", "Event")
-
-                if iv.get("t_evento"):
-                    comment_data.append((iv.get("t_evento"), f"{event_name} Start"))
-                if iv.get("t_recovery"):
-                    comment_data.append(
-                        (iv.get("t_recovery"), f"{event_name} Recovery")
-                    )
-                if iv.get("t_tilt_down"):
-                    comment_data.append((iv.get("t_tilt_down"), f"{event_name} End"))
-                if iv.get("t_baseline"):
-                    comment_data.append(
-                        (iv.get("t_baseline"), f"{event_name} Baseline")
-                    )
-
-            # Remove duplicates by timestamp
-            comment_dict = {}
-            for timestamp, label in comment_data:
-                if timestamp is not None:
-                    if timestamp not in comment_dict:
-                        comment_dict[timestamp] = []
-                    comment_dict[timestamp].append(label)
 
             # Get current chunk range
             start_time = self.start_sb.value()
             end_time = start_time + self.chunk_sb.value()
 
-            # Add vertical lines to ECG and HR plots (not wavelet as it's different scale)
-            for plot in [self.ecg_plot, self.hr_plot]:
-                for timestamp, labels in comment_dict.items():
-                    if start_time <= timestamp <= end_time:
-                        # Create vertical line with label
-                        line = pg.InfiniteLine(
-                            pos=timestamp,
-                            angle=90,
-                            pen=pg.mkPen(
-                                "#ff9500", width=2, style=pg.QtCore.Qt.DashLine
-                            ),
-                            label=" | ".join(labels),  # Combine multiple labels
-                            labelOpts={
-                                "position": 0.95,
-                                "color": "#ff9500",
-                                "fill": (255, 149, 0, 50),
-                            },
-                        )
-                        line.setZValue(1)  # Behind data but visible
-                        plot.addItem(line)
-                        # Track the marker for cleanup
-                        self.comment_markers.append(line)
+            # Add markers to ECG and HR plots only (not wavelet plot due to different scale)
+            plots_to_mark = [
+                (self.ecg_plot, "ecg_plot"),
+                (self.hr_plot, "hr_plot")
+            ]
+            
+            for plot, plot_id in plots_to_mark:
+                self.comment_marker_manager.add_markers_to_single_plot(
+                    plot, intervals, start_time, end_time, plot_id
+                )
+
+            self.logger.debug(f"Added comment markers for range {start_time:.1f}-{end_time:.1f}s")
 
         except Exception as e:
             self.logger.warning(f"Could not add comment markers: {e}")

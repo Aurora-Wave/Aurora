@@ -5,7 +5,7 @@ Provides adaptive downsampling based on plot resolution and data characteristics
 
 import numpy as np
 from typing import Tuple, Optional
-import logging
+from Pyside.core import get_user_logger
 
 
 class IntelligentDownsampler:
@@ -15,7 +15,7 @@ class IntelligentDownsampler:
     """
 
     def __init__(self):
-        self.logger = logging.getLogger(f"{__name__}.IntelligentDownsampler")
+        self.logger = get_user_logger(self.__class__.__name__)
 
         # Default configuration
         self.min_points = 100  # Minimum points to preserve data shape

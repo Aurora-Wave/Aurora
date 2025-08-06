@@ -13,10 +13,11 @@ class ChannelSelectionDialog(QDialog):
     Dialog to let the user select one or more signal channels from a given list.
     """
 
-    def __init__(self, channel_names, parent=None):
+    def __init__(self, channel_names, parent=None, existing_channels=None):
         super().__init__(parent)
         self.setWindowTitle("Select Channels")
         self.selected_channels = []
+        self.existing_channels = existing_channels or channel_names
 
         self.checkboxes = []
         self.init_ui(channel_names)
@@ -32,7 +33,14 @@ class ChannelSelectionDialog(QDialog):
         container_layout = QVBoxLayout(container)
 
         for name in channel_names:
-            checkbox = QCheckBox(name)
+            # Add visual indication for channels that need to be generated
+            if name == "HR_GEN" and name not in self.existing_channels:
+                display_name = f"{name} (will be generated)"
+                checkbox = QCheckBox(display_name)
+                checkbox.setToolTip("This channel will be generated using default parameters when selected")
+            else:
+                checkbox = QCheckBox(name)
+            
             self.checkboxes.append(checkbox)
             container_layout.addWidget(checkbox)
 
@@ -46,4 +54,15 @@ class ChannelSelectionDialog(QDialog):
 
     def get_selected_channels(self):
         """Return a list of the names of the selected channels."""
-        return [cb.text() for cb in self.checkboxes if cb.isChecked()]
+        selected = []
+        for cb in self.checkboxes:
+            if cb.isChecked():
+                # Handle display names that contain additional text
+                text = cb.text()
+                if " (will be generated)" in text:
+                    # Extract the actual channel name
+                    channel_name = text.split(" (will be generated)")[0]
+                    selected.append(channel_name)
+                else:
+                    selected.append(text)
+        return selected

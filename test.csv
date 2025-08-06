@@ -1,2 +1,14 @@
-HR_gen_mean_min1;HR_gen_max_min1;HR_gen_mean_min2;HR_gen_max_min2;HR_gen_mean_min3;HR_gen_max_min3;HR_gen_mean_min4;HR_gen_max_min4;HR_gen_mean_min5;HR_gen_max_min5;HR_gen_mean_min6;HR_gen_max_min6;HR_gen_mean_min7;HR_gen_max_min7;HR_gen_mean_min8;HR_gen_max_min8;HR_gen_mean_min9;HR_gen_max_min9;HR_gen_mean_min10;HR_gen_max_min10;HR_gen_mean_min11;HR_gen_max_min11;HR_gen_mean_min12;HR_gen_max_min12
-83.084900;118.577072;81.419655;86.705200;83.751999;95.087166;87.925468;102.739723;90.726616;100.502510;93.194908;108.499092;86.758331;95.693779;89.955643;108.892921;89.837479;102.739723;91.067146;102.040817;100.638130;113.851990;103.001091;118.343193
+Event;Channel;Segment;Start_Time_s;End_Time_s;Duration_s;Mean;Max
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_1;4809.80;4869.80;60.00;73.786324;95.087166
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_2;4869.80;4929.80;60.00;82.783630;96.000000
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_3;4929.80;4989.80;60.00;86.273216;99.337746
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_4;4989.80;5049.80;60.00;88.013199;99.337746
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_5;5049.80;5109.80;60.00;83.385239;100.000000
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_6;5109.80;5169.80;60.00;88.105522;100.000000
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_7;5169.80;5229.80;60.00;83.449989;99.833611
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_8;5229.80;5289.80;60.00;85.371552;99.833611
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_9;5289.80;5349.80;60.00;85.530640;99.833611
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_10;5349.80;5409.80;60.00;90.726845;99.833611
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_11;5409.80;5469.80;60.00;90.107124;99.833611
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_12;5469.80;5529.80;60.00;63.278759;100.000000
+Tilt Angle 80;HR_gen_haar_lv4_rr0.6;Seg_13;5529.80;5540.00;10.20;57.214859;88.105728

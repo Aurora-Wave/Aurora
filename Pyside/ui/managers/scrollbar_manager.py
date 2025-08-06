@@ -5,7 +5,7 @@ Provides standardized scrollbar configuration and event handling.
 
 from PySide6.QtWidgets import QScrollBar
 from PySide6.QtCore import Qt, QObject, Signal
-import logging
+from Pyside.core import get_user_logger
 
 
 class ScrollbarManager(QObject):
@@ -19,7 +19,7 @@ class ScrollbarManager(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.logger = logging.getLogger(f"{__name__}.ScrollbarManager")
+        self.logger = get_user_logger(self.__class__.__name__)
 
         # Scrollbar configuration
         self._min_height = 20

@@ -2,6 +2,7 @@
 
 import numpy as np
 from Pyside.processing.ecg_analyzer import ECGAnalyzer
+from Pyside.core.config_manager import get_config_manager
 
 class Signal:
     """
@@ -59,6 +60,7 @@ class HR_Gen_Signal(Signal):
                  units: str, fs: float):
         super().__init__(name=name, data=ecg_data, time=ecg_time, units=units, fs=fs)
         self.r_peaks = np.array([], dtype=int)
+        self.config_manager = get_config_manager()
 
     def set_r_peaks(self, ECG: Signal, **kargs):
         peaks = ECGAnalyzer.detect_rr_peaks(ECG.data, ECG.fs, **kargs)
@@ -82,7 +84,8 @@ class HR_Gen_Signal(Signal):
             if rr <= 0:
                 continue
             hr = 60.0 / rr
-            if hr < 20 or hr > 250:
+            min_hr, max_hr = self.config_manager.get_hr_validation_limits()
+            if hr < min_hr or hr > max_hr:
                 hr = np.nan
             if start < end:
                 hr_data[start:end] = hr
@@ -135,7 +138,8 @@ class HR_Gen_Signal(Signal):
             self._data[start:end] = np.nan
             return
         hr = 60.0 / rr
-        if hr < 20 or hr > 250:
+        min_hr, max_hr = self.config_manager.get_hr_validation_limits()
+        if hr < min_hr or hr > max_hr:
             hr = np.nan
         self._data[start:end] = hr
 

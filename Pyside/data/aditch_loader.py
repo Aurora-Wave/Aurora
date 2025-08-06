@@ -3,7 +3,7 @@ import adi
 from Pyside.core.signal import Signal, HR_Gen_Signal
 from Pyside.core.comments import EMSComment
 from Pyside.data.base_loader import BaseLoader
-import logging
+from Pyside.core import get_user_logger
 class AditchLoader(BaseLoader):
     """
     Loader for .adicht files using adi.read_file.
@@ -15,7 +15,7 @@ class AditchLoader(BaseLoader):
         self.file_data = None
         self.metadata = {}
         self.comments = []
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_user_logger(self.__class__.__name__)
 
     def load(self, path: str):
         self.path = path
@@ -65,7 +65,7 @@ class AditchLoader(BaseLoader):
             # Defaults for HR_gen parameters
             wavelet = kwargs.get('wavelet', 'haar')
             swt_level = kwargs.get('swt_level', 4)
-            min_rr_sec = kwargs.get('min_rr_sec', 0.4)
+            min_rr_sec = kwargs.get('min_rr_sec', 0.6)
   
             hr_sig = HR_Gen_Signal(
                 name="HR_gen",

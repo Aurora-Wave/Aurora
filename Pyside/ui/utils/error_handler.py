@@ -25,14 +25,15 @@ class ErrorHandler(QObject):
         self.setup_logging()
 
     def setup_logging(self):
-        """Configurar sistema de logging con archivos rotativos."""
-        # Crear directorio de logs si no existe
-        log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
-        os.makedirs(log_dir, exist_ok=True)
-
-        # Configurar archivo de log con timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = os.path.join(log_dir, f"aurora_wave_{timestamp}.log")
+        """Use centralized logging system instead of creating separate logs."""
+        # DISABLED: Use the centralized logging system from core.logging_config
+        # The old system created logs in the wrong directory (Pyside/logs/)
+        # New system uses proper application root detection
+        
+        # Import and use the centralized logging system
+        from Pyside.core import get_user_logger
+        self.logger = get_user_logger(self.app_name)
+        return  # Exit early - centralized system handles everything
 
         # Configurar logger principal
         self.logger = logging.getLogger(self.app_name)

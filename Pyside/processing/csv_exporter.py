@@ -4,17 +4,54 @@ Handles the export of signal statistics to CSV format.
 """
 
 import csv
-import logging
 from typing import List, Tuple, Dict, Any, Optional
+from Pyside.core import get_user_logger
 from Pyside.processing.interval_extractor import extract_event_intervals
 
 
 class CSVExporter:
     """Handles CSV export functionality for signal data."""
 
-    def __init__(self, data_manager):
+    def __init__(self, data_manager, hr_params=None):
         self.data_manager = data_manager
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_user_logger(self.__class__.__name__)
+        self.hr_params = hr_params or {}
+        
+    def _parse_hr_channel_name(self, channel_name: str):
+        """
+        Parse a descriptive HR channel name back to channel and parameters.
+        
+        Args:
+            channel_name: Either "HR_gen" or "HR_gen_wavelet_lv#_rr#"
+            
+        Returns:
+            (base_channel, hr_params_dict)
+        """
+        if not channel_name.upper().startswith("HR_GEN"):
+            return channel_name, {}
+            
+        if channel_name.upper() == "HR_GEN":
+            return "HR_gen", self.hr_params
+            
+        # Parse descriptive name like "HR_gen_db5_lv1_rr0.6"
+        parts = channel_name.split('_')
+        if len(parts) >= 5:  # HR_gen_wavelet_lv#_rr#
+            try:
+                wavelet = parts[2]
+                level_str = parts[3][2:]  # Remove "lv" prefix
+                rr_str = parts[4][2:]     # Remove "rr" prefix
+                
+                hr_params = {
+                    "wavelet": wavelet,
+                    "swt_level": int(level_str),
+                    "min_rr_sec": float(rr_str)
+                }
+                return "HR_gen", hr_params
+            except (ValueError, IndexError):
+                self.logger.warning(f"Could not parse HR channel name: {channel_name}")
+                return "HR_gen", self.hr_params
+        
+        return "HR_gen", self.hr_params
 
     def extract_test_entries(self, file_path: str) -> List[Tuple[str, Dict[str, Any]]]:
         """Extract test entries from file for selection dialog."""
@@ -75,82 +112,9 @@ class CSVExporter:
 
         return export_intervals
 
-    def calculate_signal_statistics(
-        self,
-        file_path: str,
-        channel: str,
-        start_time: float,
-        end_time: Optional[float],
-        segments: int,
-        segment_duration: float = 60.0,  # Nueva opción configurable
-    ) -> List[str]:
-        """Calculate statistics for a signal within specified time range."""
-        row_data = []
-
-        for seg_idx in range(segments):
-            seg_start = start_time + (seg_idx * segment_duration)
-            seg_end = (
-                min(start_time + ((seg_idx + 1) * segment_duration), end_time)
-                if end_time
-                else seg_start + segment_duration
-            )
-
-            try:
-                # Manejar HR_gen con parámetros por defecto
-                if channel.upper() == "HR_GEN":
-                    sig = self.data_manager.get_trace(
-                        file_path, channel, wavelet="haar", swt_level=4, min_rr_sec=0.5
-                    )
-                else:
-                    sig = self.data_manager.get_trace(file_path, channel)
-
-                data = sig.data
-                fs = sig.fs
-                i0 = int(seg_start * fs)
-                i1 = int(seg_end * fs)
-                seg = data[i0:i1] if i1 <= len(data) else data[i0:]
-
-                if seg.size > 0:
-                    row_data.extend(
-                        [
-                            f"{float(seg.mean()):.6f}",
-                            f"{float(seg.max()):.6f}",
-                        ]
-                    )
-                else:
-                    row_data.extend(["", ""])
-
-            except Exception as ex:
-                self.logger.warning(f"Error processing {channel}: {ex}")
-                row_data.extend(["ERROR", "ERROR"])
-
-        return row_data
-
-    def calculate_full_signal_statistics(
-        self, file_path: str, channel: str
-    ) -> List[str]:
-        """Calculate statistics for complete signal."""
-        try:
-            # Manejar HR_gen con parámetros por defecto
-            if channel.upper() == "HR_GEN":
-                sig = self.data_manager.get_trace(
-                    file_path, channel, wavelet="haar", swt_level=4, min_rr_sec=0.5
-                )
-            else:
-                sig = self.data_manager.get_trace(file_path, channel)
-
-            data = sig.data
-            if data.size > 0:
-                return [
-                    f"{float(data.mean()):.6f}",
-                    f"{float(data.max()):.6f}",
-                ]
-            else:
-                return ["", ""]
-
-        except Exception as ex:
-            self.logger.warning(f"Error processing {channel}: {ex}")
-            return ["ERROR", "ERROR"]
+    # Note: calculate_signal_statistics and calculate_full_signal_statistics methods
+    # have been consolidated into the export_to_csv method for better organization
+    # and to support the new row-based CSV format
 
     def generate_headers(
         self,
@@ -158,42 +122,32 @@ class CSVExporter:
         export_intervals: List[Tuple[str, float, Optional[float]]],
         segment_duration: float = 60.0,  # Nueva opción configurable
     ) -> List[str]:
-        """Generate CSV headers based on export configuration."""
-        headers = []
-
-        if not export_intervals:
-            return headers
-
-        # Usar el primer intervalo para determinar la estructura
-        test_name, start_time, end_time = export_intervals[0]
-
-        if end_time is not None:
-            # Export por segmentos configurables
-            duration = end_time - start_time
-            segments = int(duration / segment_duration) + 1
-
-            # Determinar nombre del segmento
-            if segment_duration == 60.0:
-                seg_name = "min"
-            elif segment_duration == 30.0:
-                seg_name = "30s"
-            else:
-                seg_name = f"{int(segment_duration)}s"
-
-            for seg_idx in range(segments):
-                for channel in selected_signals:
-                    headers.extend(
-                        [
-                            f"{channel}_mean_{seg_name}{seg_idx+1}",
-                            f"{channel}_max_{seg_name}{seg_idx+1}",
-                        ]
-                    )
-        else:
-            # Export de señal completa
-            for channel in selected_signals:
-                headers.extend([f"{channel}_mean_full", f"{channel}_max_full"])
-
+        """Generate CSV headers for row-based format with event and channel identification."""
+        # Row-based format with explicit columns for better data organization
+        headers = [
+            "Event",           # Source event name
+            "Channel",         # Signal channel name
+            "Segment",         # Segment number or "Full"
+            "Start_Time_s",    # Segment start time in seconds
+            "End_Time_s",      # Segment end time in seconds
+            "Duration_s",      # Segment duration in seconds
+            "Mean",            # Mean value
+            "Max"              # Maximum value
+        ]
+        
         return headers
+    
+    def _get_descriptive_channel_name(self, channel: str) -> str:
+        """
+        Return the channel name as-is since channels are already descriptive.
+        
+        Args:
+            channel: Channel name (already descriptive for HR_gen variants)
+            
+        Returns:
+            Channel name for use in CSV headers
+        """
+        return channel
 
     def export_to_csv(
         self,
@@ -204,7 +158,7 @@ class CSVExporter:
         save_path: str,
         minute_duration: float = 60.0,  # Nueva opción configurable
     ) -> None:
-        """Export selected signals and tests to CSV file."""
+        """Export selected signals and tests to CSV file with row-based format."""
 
         # Preparar intervalos de exportación
         export_intervals = self.prepare_export_intervals(selected_tests, test_entries)
@@ -212,44 +166,122 @@ class CSVExporter:
         if not export_intervals:
             raise ValueError("No valid intervals found for export")
 
-        # Generar headers y filas
+        # Generar headers para formato basado en filas
         headers = self.generate_headers(
             selected_signals, export_intervals, minute_duration
         )
         rows = []
 
+        # Generate one row per channel per segment per event
         for test_name, start_time, end_time in export_intervals:
-            row = []
+            for channel in selected_signals:
+                if end_time is not None:
+                    # Segmented analysis
+                    duration = end_time - start_time
+                    segments = int(duration / minute_duration) + 1
 
-            if end_time is not None:
-                # Calcular estadísticas por segmentos configurables (antes eran minutos fijos)
-                duration = end_time - start_time
-                segments = int(duration / minute_duration) + 1
+                    for seg_idx in range(segments):
+                        seg_start = start_time + (seg_idx * minute_duration)
+                        seg_end = (
+                            min(start_time + ((seg_idx + 1) * minute_duration), end_time)
+                            if end_time
+                            else seg_start + minute_duration
+                        )
+                        seg_duration = seg_end - seg_start
 
-                for channel in selected_signals:
-                    row_data = self.calculate_signal_statistics(
-                        file_path,
-                        channel,
-                        start_time,
-                        end_time,
-                        segments,
-                        minute_duration,
-                    )
-                    row.extend(row_data)
-            else:
-                # Señal completa
-                for channel in selected_signals:
-                    row_data = self.calculate_full_signal_statistics(file_path, channel)
-                    row.extend(row_data)
+                        # Calculate statistics for this specific segment
+                        try:
+                            # Parse channel name to get base channel and HR parameters
+                            base_channel, hr_params = self._parse_hr_channel_name(channel)
+                            
+                            if base_channel.upper() == "HR_GEN":
+                                sig = self.data_manager.get_trace(file_path, base_channel, **hr_params)
+                            else:
+                                sig = self.data_manager.get_trace(file_path, base_channel)
 
-            rows.append(row)
+                            data = sig.data
+                            fs = sig.fs
+                            i0 = int(seg_start * fs)
+                            i1 = int(seg_end * fs)
+                            seg_data = data[i0:i1] if i1 <= len(data) else data[i0:]
 
-        # Escribir archivo CSV
+                            if seg_data.size > 0:
+                                mean_val = float(seg_data.mean())
+                                max_val = float(seg_data.max())
+                            else:
+                                mean_val = ""
+                                max_val = ""
+
+                        except Exception as ex:
+                            base_channel, _ = self._parse_hr_channel_name(channel)
+                            self.logger.warning(f"Error processing {channel} (base: {base_channel}) segment {seg_idx+1}: {ex}")
+                            mean_val = "ERROR"
+                            max_val = "ERROR"
+
+                        # Create row: Event, Channel, Segment, Start_Time_s, End_Time_s, Duration_s, Mean, Max
+                        row = [
+                            test_name,
+                            self._get_descriptive_channel_name(channel),
+                            f"Seg_{seg_idx+1}",
+                            f"{seg_start:.2f}",
+                            f"{seg_end:.2f}",
+                            f"{seg_duration:.2f}",
+                            f"{mean_val:.6f}" if isinstance(mean_val, float) else mean_val,
+                            f"{max_val:.6f}" if isinstance(max_val, float) else max_val
+                        ]
+                        rows.append(row)
+
+                else:
+                    # Full signal analysis
+                    try:
+                        # Parse channel name to get base channel and HR parameters
+                        base_channel, hr_params = self._parse_hr_channel_name(channel)
+                        
+                        if base_channel.upper() == "HR_GEN":
+                            sig = self.data_manager.get_trace(file_path, base_channel, **hr_params)
+                        else:
+                            sig = self.data_manager.get_trace(file_path, base_channel)
+
+                        data = sig.data
+                        if data.size > 0:
+                            mean_val = float(data.mean())
+                            max_val = float(data.max())
+                            duration = len(data) / sig.fs
+                        else:
+                            mean_val = ""
+                            max_val = ""
+                            duration = 0
+
+                    except Exception as ex:
+                        base_channel, _ = self._parse_hr_channel_name(channel)
+                        self.logger.warning(f"Error processing full signal {channel} (base: {base_channel}): {ex}")
+                        mean_val = "ERROR"
+                        max_val = "ERROR"
+                        duration = 0
+
+                    # Create row: Event, Channel, Segment, Start_Time_s, End_Time_s, Duration_s, Mean, Max
+                    row = [
+                        test_name,
+                        self._get_descriptive_channel_name(channel),
+                        "Full",
+                        "0.00",
+                        f"{duration:.2f}",
+                        f"{duration:.2f}",
+                        f"{mean_val:.6f}" if isinstance(mean_val, float) else mean_val,
+                        f"{max_val:.6f}" if isinstance(max_val, float) else max_val
+                    ]
+                    rows.append(row)
+
+        # Write CSV file
         with open(save_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f, delimiter=";")
             writer.writerow(headers)
             writer.writerows(rows)
 
+        total_measurements = len(rows)
+        unique_events = len(set(row[0] for row in rows))
+        unique_channels = len(set(row[1] for row in rows))
+        
         self.logger.info(
-            f"CSV exported successfully: {len(rows)} rows, {len(selected_signals)} signals"
+            f"CSV exported successfully: {total_measurements} measurements from {unique_events} events and {unique_channels} channels"
         )
