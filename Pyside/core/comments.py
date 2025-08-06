@@ -6,7 +6,7 @@ class EMSComment:
     navigation, editing, and labeling.
     """
 
-    def __init__(self, text, tick_position, channel, comment_id, tick_dt, time_sec, user_defined=False):
+    def __init__(self, text, tick_position, channel, comment_id, tick_dt, time_sec, user_defined=False, label=None):
         self.text = text                    # Original comment text (raw from LabChart)
         self.tick_position = tick_position  # Index of the sample tick
         self.channel = channel              # Associated channel name or index
@@ -14,6 +14,7 @@ class EMSComment:
         self.tick_dt = tick_dt              # Tick duration (s)
         self.time = time_sec                # Absolute time (s)
         self.user_defined = user_defined    # Whether this comment was added manually by the user
+        self.label = label or text          # Display label, defaults to text if not provided
 
     def to_dict(self):
         """

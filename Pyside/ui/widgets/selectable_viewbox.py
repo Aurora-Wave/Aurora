@@ -1,6 +1,6 @@
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
-from ..utils.scroll_config import ScrollConfig
+from Pyside.ui.utils.scroll_config import ScrollConfig
 
 
 class SelectableViewBox(pg.ViewBox):

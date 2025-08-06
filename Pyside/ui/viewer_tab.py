@@ -10,9 +10,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 import pyqtgraph as pg
-from ui.widgets.selectable_viewbox import SelectableViewBox
-from processing.chunk_loader import ChunkLoader
-from core.channel_units import get_channel_label_with_unit
+from Pyside.ui.widgets.selectable_viewbox import SelectableViewBox
+from Pyside.processing.chunk_loader import ChunkLoader
+from Pyside.core.channel_units import get_channel_label_with_unit
 
 
 class ViewerTab(QWidget):

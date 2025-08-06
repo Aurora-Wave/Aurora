@@ -16,12 +16,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 import pyqtgraph as pg
-from data.data_manager import DataManager
-from processing.interval_extractor import extract_event_intervals
-from processing.chunk_loader import ChunkLoader
-from core.channel_units import get_channel_label_with_unit
-from core.visualization import default_downsampler
-from ui.managers import CommentMarkerManager, ScrollbarManager
+from Pyside.data.data_manager import DataManager
+from Pyside.processing.interval_extractor import extract_event_intervals
+from Pyside.processing.chunk_loader import ChunkLoader
+from Pyside.core.channel_units import get_channel_label_with_unit
+from Pyside.core.visualization import default_downsampler
+from Pyside.ui.managers import CommentMarkerManager, ScrollbarManager
 
 
 class TiltTab(QWidget):

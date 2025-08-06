@@ -11,10 +11,10 @@ from PySide6.QtWidgets import (
     QPushButton,
 )
 import pyqtgraph as pg
-from processing.chunk_loader import ChunkLoader
+from Pyside.processing.chunk_loader import ChunkLoader
 from PySide6.QtCore import Qt
 import logging
-from core.channel_units import get_channel_label_with_unit
+from Pyside.core.channel_units import get_channel_label_with_unit
 
 
 def sanitize_for_plot(y, clip=1e6):

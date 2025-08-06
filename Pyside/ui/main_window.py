@@ -15,15 +15,15 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QTimer
-from data.data_manager import DataManager
-from ui.viewer_tab import ViewerTab
-from ui.analysis_tab import AnalysisTab
-from ui.tilt_tab import TiltTab
-from ui.widgets.channel_selection_dialog import ChannelSelectionDialog
-from ui.widgets.export_selection_dialog import ExportSelectionDialog
-from ui.utils.error_handler import error_handler
-from processing.interval_extractor import extract_event_intervals
-from processing.csv_exporter import CSVExporter
+from Pyside.data.data_manager import DataManager
+from Pyside.ui.viewer_tab import ViewerTab
+from Pyside.ui.analysis_tab import AnalysisTab
+from Pyside.ui.tilt_tab import TiltTab
+from Pyside.ui.widgets.channel_selection_dialog import ChannelSelectionDialog
+from Pyside.ui.widgets.export_selection_dialog import ExportSelectionDialog
+from Pyside.ui.utils.error_handler import error_handler
+from Pyside.processing.interval_extractor import extract_event_intervals
+from Pyside.processing.csv_exporter import CSVExporter
 
 # Configure logging for debugging
 logging.basicConfig(level=logging.DEBUG)
@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AuroraWave")
-        self.setMinimumSize(1200, 800)
+        #self.setMinimumSize(1200, 800)
 
         # Configurar error handler global PRIMERO
         error_handler.install_global_handler(self)

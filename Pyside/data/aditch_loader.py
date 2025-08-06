@@ -1,8 +1,8 @@
 import numpy as np
 import adi
-from core.signal import Signal, HR_Gen_Signal
-from core.comments import EMSComment
-from data.base_loader import BaseLoader
+from Pyside.core.signal import Signal, HR_Gen_Signal
+from Pyside.core.comments import EMSComment
+from Pyside.data.base_loader import BaseLoader
 import logging
 class AditchLoader(BaseLoader):
     """

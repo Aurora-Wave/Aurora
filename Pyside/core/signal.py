@@ -1,7 +1,7 @@
 # data/signal.py
 
 import numpy as np
-from processing.ecg_analyzer import ECGAnalyzer
+from Pyside.processing.ecg_analyzer import ECGAnalyzer
 
 class Signal:
     """

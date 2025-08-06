@@ -6,7 +6,7 @@ Handles the export of signal statistics to CSV format.
 import csv
 import logging
 from typing import List, Tuple, Dict, Any, Optional
-from processing.interval_extractor import extract_event_intervals
+from Pyside.processing.interval_extractor import extract_event_intervals
 
 
 class CSVExporter:

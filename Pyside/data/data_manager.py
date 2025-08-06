@@ -1,7 +1,7 @@
 import os
 import logging
 from collections import deque
-from .aditch_loader import AditchLoader
+from Pyside.data.aditch_loader import AditchLoader
 
 
 # from .edf_loader import EDFLoader
