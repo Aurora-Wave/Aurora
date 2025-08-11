@@ -19,11 +19,13 @@ from Pyside.ui.widgets.export_selection_dialog import ExportSelectionDialog
 from Pyside.core import get_user_logger, get_current_session, get_config_manager
 from Pyside.processing.interval_extractor import extract_event_intervals
 from Pyside.processing.csv_exporter import CSVExporter
+from Pyside.processing.csv_exporter_horizontal import CSVExporterHorizontal
 
 # Logging now handled by unified system in core.logging_config
 
 # Suprimir warnings específicos de pyqtgraph
 import warnings
+
 warnings.filterwarnings("ignore", "overflow encountered in cast", RuntimeWarning)
 
 
@@ -35,7 +37,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AuroraWave")
-        #self.setMinimumSize(1200, 800)
+        # self.setMinimumSize(1200, 800)
 
         # Initialize logging with user context
         self.logger = get_user_logger(self.__class__.__name__)
@@ -75,7 +77,7 @@ class MainWindow(QMainWindow):
 
         # Apply startup configuration (load last session)
         self._apply_startup_configuration()
-        
+
         self.session.log_action("MainWindow setup complete", self.logger)
 
     # Menubar definition
@@ -108,7 +110,9 @@ class MainWindow(QMainWindow):
             if not success:
                 self.logger.debug("No valid startup configuration found or applied")
         except Exception as e:
-            self.logger.error(f"Failed to apply startup configuration: {e}", exc_info=True)
+            self.logger.error(
+                f"Failed to apply startup configuration: {e}", exc_info=True
+            )
 
     def _check_application_health(self):
         """Verificación periódica del estado de la aplicación."""
@@ -165,11 +169,15 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self.session.log_action(f"File selected: {os.path.basename(path)}", self.logger)
+            self.session.log_action(
+                f"File selected: {os.path.basename(path)}", self.logger
+            )
             self.logger.info(f"DataManager trying to open a file at {path}")
             self.data_manager.load_file(path)
             self.current_file = path
-            self.session.log_action(f"File loaded successfully: {os.path.basename(path)}", self.logger)
+            self.session.log_action(
+                f"File loaded successfully: {os.path.basename(path)}", self.logger
+            )
             meta = self.data_manager.get_metadata(path)
             channels = meta.get("channels", [])
             if not channels:
@@ -181,9 +189,13 @@ class MainWindow(QMainWindow):
             channels_for_selection = channels.copy()
             if "HR_GEN" not in channels_for_selection:
                 channels_for_selection.append("HR_GEN")
-                self.logger.debug("Added HR_GEN to channel selection (not yet generated)")
+                self.logger.debug(
+                    "Added HR_GEN to channel selection (not yet generated)"
+                )
 
-            dlg = ChannelSelectionDialog(channels_for_selection, self, existing_channels=channels)
+            dlg = ChannelSelectionDialog(
+                channels_for_selection, self, existing_channels=channels
+            )
             if not dlg.exec():
                 return
             selected = dlg.get_selected_channels()
@@ -194,43 +206,52 @@ class MainWindow(QMainWindow):
             if not selected:
                 QMessageBox.information(self, "No Selection", "No channels selected.")
                 return
-            
+
             # Generate HR_GEN if selected but doesn't exist in the original file
             if "HR_GEN" in selected and "HR_GEN" not in channels:
-                self.logger.info("HR_GEN selected but not found in file. Generating with analysis tab default parameters...")
+                self.logger.info(
+                    "HR_GEN selected but not found in file. Generating with analysis tab default parameters..."
+                )
                 try:
                     # Generate HR_GEN with analysis tab default parameters for consistency
                     analysis_settings = self.config_manager.get_analysis_settings()
                     hr_params = {
                         "wavelet": analysis_settings.get("wavelet", "haar"),
                         "swt_level": analysis_settings.get("level", 4),
-                        "min_rr_sec": analysis_settings.get("min_rr_sec", 0.6)
+                        "min_rr_sec": analysis_settings.get("min_rr_sec", 0.6),
                     }
                     self.logger.debug(f"Using HR generation parameters: {hr_params}")
                     hr_signal = self.data_manager.get_trace(path, "HR_GEN", **hr_params)
-                    self.logger.info("HR_GEN generated successfully and added to file metadata")
-                    self.session.log_action(f"HR_GEN generated at startup with params: {hr_params}", self.logger)
+                    self.logger.info(
+                        "HR_GEN generated successfully and added to file metadata"
+                    )
+                    self.session.log_action(
+                        f"HR_GEN generated at startup with params: {hr_params}",
+                        self.logger,
+                    )
                 except Exception as e:
                     self.logger.error(f"Failed to generate HR_GEN: {e}")
                     QMessageBox.warning(
-                        self, 
-                        "HR Generation Failed", 
-                        f"Could not generate HR_GEN signal: {str(e)}\n\nProceeding without HR_GEN."
+                        self,
+                        "HR Generation Failed",
+                        f"Could not generate HR_GEN signal: {str(e)}\n\nProceeding without HR_GEN.",
                     )
                     # Remove HR_GEN from selected channels since generation failed
                     selected = [ch for ch in selected if ch != "HR_GEN"]
                     if not selected:
-                        QMessageBox.information(self, "No Selection", "No valid channels selected.")
+                        QMessageBox.information(
+                            self, "No Selection", "No valid channels selected."
+                        )
                         return
 
             self.update_tabs(selected)
-            
+
             # Save the new file and channel selection to configuration
             self.config_manager.set_last_file_path(path)
             self.config_manager.set_default_signals(selected)
             self.config_manager.save_config()
             self.logger.debug("Configuration updated and saved")
-            
+
         except Exception as e:
             self.logger.critical(f"Failed to load file: {e}", exc_info=True)
             QMessageBox.critical(self, "Load Error", f"Failed to load file: {e}")
@@ -239,7 +260,9 @@ class MainWindow(QMainWindow):
         # FIXME Arreglar para que ViewerTab se inicie vacia igual que las otras y luego se actualice
         """Create and insert ViewerTab, and update Tilt and Analysis tabs."""
         try:
-            self.logger.info(f"Updating tabs with {len(selected_channels)} selected channels")
+            self.logger.info(
+                f"Updating tabs with {len(selected_channels)} selected channels"
+            )
             return self._update_tabs_impl(selected_channels)
         except Exception as e:
             self.logger.error(f"Tab update failed: {e}", exc_info=True)
@@ -271,28 +294,30 @@ class MainWindow(QMainWindow):
         self.analysis_tab.update_analysis_tab(self.data_manager, path)
         # Then pass those hr_params into EventTab
         self.event_tab.update_event_tab(self.data_manager, path, hr_params)
-    
+
     def get_current_hr_params(self):
         """Get current HR_GEN parameters from Analysis tab."""
         return self.analysis_tab.get_hrgen_params()
-    
+
     def update_viewer_tabs_hr_params(self):
         """Update HR parameters in all ViewerTab instances when Analysis tab changes."""
         try:
             current_hr_params = self.get_current_hr_params()
             self.logger.debug(f"Updating ViewerTab HR parameters: {current_hr_params}")
-            
+
             # Update all ViewerTab instances (excluding Tilt and Analysis tabs)
             for i in range(self.tab_widget.count()):
                 widget = self.tab_widget.widget(i)
                 if isinstance(widget, ViewerTab):
                     widget.update_hr_params(current_hr_params)
-                    self.logger.debug(f"Updated HR parameters for ViewerTab at index {i}")
-                    
+                    self.logger.debug(
+                        f"Updated HR parameters for ViewerTab at index {i}"
+                    )
+
             # Also update EventTab if it uses HR_GEN
             self.event_tab.update_hr_params(current_hr_params)
             self.logger.debug("Updated HR parameters for EventTab")
-            
+
         except Exception as e:
             self.logger.error(f"Error updating HR parameters across tabs: {e}")
 
@@ -306,7 +331,7 @@ class MainWindow(QMainWindow):
             return None
 
     def _export_csv_impl(self):
-        """Implementación protegida de exportación CSV."""
+        """Implementación protegida de exportación CSV en formato horizontal."""
         if not self.current_file:
             QMessageBox.warning(self, "Export", "No file loaded.")
             return
@@ -314,8 +339,8 @@ class MainWindow(QMainWindow):
         path = self.current_file
         all_signals = self.data_manager.get_available_channels_for_export(path)
 
-        # Create exporter - it will parse HR parameters from channel names
-        exporter = CSVExporter(self.data_manager)
+        # Create horizontal exporter - it will parse HR parameters from channel names
+        exporter = CSVExporterHorizontal(self.data_manager)
         test_entries = exporter.extract_test_entries(path)
         unique_tests = [entry[0] for entry in test_entries]
 
@@ -340,20 +365,24 @@ class MainWindow(QMainWindow):
         if not save_path:
             return
 
-        # Exportar usando el módulo dedicado
+        # Exportar usando el módulo horizontal
         try:
-            exporter.export_to_csv(
+            exporter.export_to_csv_horizontal(
                 path, sel_signals, sel_tests, test_entries, save_path, segment_duration
             )
-            
-            self.session.log_action(f"CSV export successful: {len(sel_signals)} signals, {len(sel_tests) if sel_tests else 1} tests", self.logger)
+
+            self.session.log_action(
+                f"CSV export successful (horizontal): {len(sel_signals)} signals, {len(sel_tests) if sel_tests else 1} tests",
+                self.logger,
+            )
 
             QMessageBox.information(
                 self,
                 "Export Success",
-                f"CSV exported successfully to:\n{save_path}\n\n"
+                f"CSV exported successfully in horizontal format to:\n{save_path}\n\n"
                 f"📊 {len(sel_tests) if sel_tests else 1} test instance(s) exported\n"
-                f"📈 {len(sel_signals)} signal(s) included",
+                f"📈 {len(sel_signals)} signal(s) included\n"
+                f"🔄 Format: signal_mean_tiempoX, signal_max_tiempoX",
             )
 
         except Exception as ex:
@@ -374,7 +403,10 @@ class MainWindow(QMainWindow):
         """Override close event para limpiar recursos."""
         try:
             duration = self.session.get_session_duration()
-            self.session.log_action(f"Application closing after {duration:.1f}s with {self.session.actions_count} total actions", self.logger)
+            self.session.log_action(
+                f"Application closing after {duration:.1f}s with {self.session.actions_count} total actions",
+                self.logger,
+            )
             self.logger.info("Cerrando aplicación...")
 
             # Save current session configuration
