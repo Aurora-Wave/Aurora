@@ -75,6 +75,7 @@ class ChunkLoader(QObject):
         channel_names: list[str],
         start_sec: float,
         duration_sec: float,
+        hr_params: dict = None,
     ):
         """
         Synchronously extract the chunk(s) of data requested from DataManager.
@@ -92,8 +93,13 @@ class ChunkLoader(QObject):
             If multiple: dict {channel: np.ndarray}.
         """
         results = {}
+        hr_params = hr_params or {}
         for ch in channel_names:
-            sig = data_manager.get_trace(file_path, ch)
+            # Use HR parameters for HR_GEN signals
+            if ch.upper() == "HR_GEN":
+                sig = data_manager.get_trace(file_path, ch, **hr_params)
+            else:
+                sig = data_manager.get_trace(file_path, ch)
             if sig is None:
                 continue
             fs = sig.fs
@@ -116,6 +122,7 @@ class ChunkLoader(QObject):
         channel_names: list[str],
         start_sec: float,
         duration_sec: float,
+        hr_params: dict = None,
     ):
         """
         Asynchronously extract the chunk(s) and emit result via QtSignal.
@@ -134,8 +141,13 @@ class ChunkLoader(QObject):
 
         # Process chunk if not in cache
         result = {}
+        hr_params = hr_params or {}
         for ch in channel_names:
-            sig = data_manager.get_trace(file_path, ch)
+            # Use HR parameters for HR_GEN signals
+            if ch.upper() == "HR_GEN":
+                sig = data_manager.get_trace(file_path, ch, **hr_params)
+            else:
+                sig = data_manager.get_trace(file_path, ch)
             if sig is None:
                 continue
             fs = sig.fs

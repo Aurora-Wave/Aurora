@@ -199,6 +199,7 @@ class ViewerTab(QWidget):
             channel_names=self.target_signals,
             start_sec=start,
             duration_sec=self.chunk_size,
+            hr_params=self.hr_params,
         )
 
     def update_chunk(self, start, end, data_dict):
@@ -404,20 +405,58 @@ class ViewerTab(QWidget):
         """Get the list of currently loaded channel names."""
         return getattr(self, 'target_signals', [])
     
-    def update_hr_params(self, new_hr_params):
-        """Update HR_GEN parameters and refresh Y-ranges for HR_GEN signals."""
+    def update_hr_params(self, new_hr_params, force_cache_refresh=False):
+        """Update HR_GEN parameters and refresh Y-ranges for HR_GEN signals.
+        
+        Args:
+            new_hr_params: New HR generation parameters
+            force_cache_refresh: If True, forces cache invalidation for HR_GEN signals
+        """
+        self.logger.info("=== VIEWERTAB UPDATE_HR_PARAMS DEBUG ===")
+        self.logger.info(f"ViewerTab instance: {id(self)}")
+        self.logger.info(f"New HR params received: {new_hr_params}")
+        self.logger.info(f"Force cache refresh: {force_cache_refresh}")
+        
         try:
             old_params = self.hr_params.copy()
             self.hr_params = new_hr_params.copy()
             
-            self.logger.debug(f"HR parameters updated from {old_params} to {new_hr_params}")
+            self.logger.info(f"HR parameters updated from {old_params} to {new_hr_params}")
+            self.logger.info(f"Has target_signals: {hasattr(self, 'target_signals')}")
+            
+            if hasattr(self, 'target_signals'):
+                self.logger.info(f"Target signals: {self.target_signals}")
+                self.logger.info(f"HR_GEN in target signals: {'HR_GEN' in self.target_signals}")
             
             # Check if HR_GEN is in our target signals
             if hasattr(self, 'target_signals') and 'HR_GEN' in self.target_signals:
                 # Recalculate Y-range for HR_GEN signal with new parameters
+                self.logger.info("Updating HR_GEN signal and Y-range")
                 dm = self.main_window.data_manager
+                
+                # If force_cache_refresh is True, invalidate the HR cache first
+                if force_cache_refresh:
+                    self.logger.info("Force cache refresh requested - invalidating HR_GEN cache")
+                    try:
+                        # Clear the HR cache for this file to force regeneration
+                        if self.file_path in dm._files:
+                            if 'hr_cache' in dm._files[self.file_path]:
+                                old_cache_size = len(dm._files[self.file_path]['hr_cache'])
+                                dm._files[self.file_path]['hr_cache'].clear()
+                                self.logger.info(f"Cleared {old_cache_size} HR cache entries for forced refresh")
+                            
+                            # Also clear signal_cache for HR_GEN if it exists
+                            if 'signal_cache' in dm._files[self.file_path]:
+                                if 'HR_GEN' in dm._files[self.file_path]['signal_cache']:
+                                    del dm._files[self.file_path]['signal_cache']['HR_GEN']
+                                    self.logger.info("Cleared HR_GEN from signal_cache for forced refresh")
+                    except Exception as cache_error:
+                        self.logger.error(f"Error during cache invalidation: {cache_error}")
+                
                 try:
+                    self.logger.info(f"Getting HR_GEN trace with params: {self.hr_params}")
                     sig = dm.get_trace(self.file_path, 'HR_GEN', **self.hr_params)
+                    self.logger.info(f"HR_GEN signal retrieved - length: {len(sig.data)}, r_peaks: {len(getattr(sig, 'r_peaks', []))}")
                     
                     # Recalculate global Y-range for HR_GEN
                     y_data = np.asarray(sig.data)
@@ -439,15 +478,22 @@ class ViewerTab(QWidget):
                         
                         # Update the stored Y-range
                         self.y_ranges['HR_GEN'] = (y_min, y_max)
-                        self.logger.debug(f"Updated HR_GEN Y-range: [{y_min:.3f}, {y_max:.3f}] with new parameters")
+                        self.logger.info(f"Updated HR_GEN Y-range: [{y_min:.3f}, {y_max:.3f}] with new parameters")
                     
                 except Exception as e:
-                    self.logger.error(f"Error updating HR_GEN Y-range: {e}")
+                    self.logger.error(f"Error updating HR_GEN Y-range: {e}", exc_info=True)
                 
                 # Trigger a chunk refresh to apply the new parameters
                 if hasattr(self, 'scrollbar') and self.scrollbar:
+                    self.logger.info(f"Refreshing chunk at position: {self.scrollbar.value()}")
                     self.request_chunk(self.scrollbar.value())
-                    self.logger.debug("Refreshed current chunk with new HR parameters")
+                    self.logger.info("Successfully refreshed current chunk with new HR parameters")
+                else:
+                    self.logger.warning("No scrollbar available - cannot refresh chunk")
+            else:
+                self.logger.info("HR_GEN not in target signals - no update needed")
+            
+            self.logger.info("=== VIEWERTAB UPDATE_HR_PARAMS COMPLETE ===")
             
         except Exception as e:
-            self.logger.error(f"Error updating HR parameters: {e}")
+            self.logger.error(f"Error updating HR parameters: {e}", exc_info=True)

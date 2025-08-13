@@ -14,3 +14,5 @@ __pycache__/
 logs/
 config/*.json
 !config/default_*.json
+# User comments
+**/comments/*.json

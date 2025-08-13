@@ -726,27 +726,47 @@ class MainWindow(QMainWindow):
         """Get current HR_GEN parameters from Analysis tab."""
         return self.analysis_tab.get_hrgen_params()
 
-    def update_viewer_tabs_hr_params(self):
-        """Update HR parameters in all ViewerTab instances when Analysis tab changes."""
+    def update_viewer_tabs_hr_params(self, force_cache_refresh=False):
+        """Update HR parameters in all ViewerTab instances when Analysis tab changes.
+        
+        Args:
+            force_cache_refresh: If True, forces cache invalidation for HR_GEN signals
+        """
+        self.logger.info("=== MAINWINDOW UPDATE_VIEWER_TABS_HR_PARAMS DEBUG ===")
         try:
             current_hr_params = self.get_current_hr_params()
-            self.logger.debug(f"Updating ViewerTab HR parameters: {current_hr_params}")
+            self.logger.info(f"Current HR parameters: {current_hr_params}")
+            self.logger.info(f"Force cache refresh: {force_cache_refresh}")
+            self.logger.info(f"Total tabs count: {self.tab_widget.count()}")
 
+            viewer_tab_count = 0
             # Update all ViewerTab instances (excluding Tilt and Analysis tabs)
             for i in range(self.tab_widget.count()):
                 widget = self.tab_widget.widget(i)
+                tab_title = self.tab_widget.tabText(i)
+                widget_type = type(widget).__name__
+                self.logger.info(f"Tab {i}: '{tab_title}' - Type: {widget_type}")
+                
                 if isinstance(widget, ViewerTab):
-                    widget.update_hr_params(current_hr_params)
-                    self.logger.debug(
-                        f"Updated HR parameters for ViewerTab at index {i}"
-                    )
+                    viewer_tab_count += 1
+                    self.logger.info(f"Updating ViewerTab at index {i} ('{tab_title}')")
+                    widget.update_hr_params(current_hr_params, force_cache_refresh=force_cache_refresh)
+                    self.logger.info(f"Successfully updated ViewerTab at index {i}")
+
+            self.logger.info(f"Total ViewerTab instances updated: {viewer_tab_count}")
 
             # Also update EventTab if it uses HR_GEN
-            self.event_tab.update_hr_params(current_hr_params)
-            self.logger.debug("Updated HR parameters for EventTab")
+            if hasattr(self, 'event_tab') and self.event_tab:
+                self.logger.info("Updating EventTab HR parameters")
+                self.event_tab.update_hr_params(current_hr_params, force_cache_refresh=force_cache_refresh)
+                self.logger.info("Successfully updated EventTab HR parameters")
+            else:
+                self.logger.warning("EventTab not available for HR parameter update")
+
+            self.logger.info("=== MAINWINDOW UPDATE COMPLETE ===")
 
         except Exception as e:
-            self.logger.error(f"Error updating HR parameters across tabs: {e}")
+            self.logger.error(f"Error updating HR parameters across tabs: {e}", exc_info=True)
 
     def _export_csv(self):
         """Export selected signal statistics to CSV."""

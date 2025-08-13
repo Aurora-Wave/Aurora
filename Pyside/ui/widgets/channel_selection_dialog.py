@@ -5,7 +5,7 @@ Dialog window that allows the user to select which channels to visualize.
 """
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QDialogButtonBox, QCheckBox, QLabel, QScrollArea, QWidget
+    QDialog, QVBoxLayout, QDialogButtonBox, QCheckBox, QLabel, QScrollArea, QWidget, QPushButton, QHBoxLayout
 )
 
 class ChannelSelectionDialog(QDialog):
@@ -47,10 +47,34 @@ class ChannelSelectionDialog(QDialog):
         scroll.setWidget(container)
         layout.addWidget(scroll)
 
+        # Add Select All / Deselect All buttons
+        select_buttons_layout = QHBoxLayout()
+        select_all_btn = QPushButton("Select All")
+        deselect_all_btn = QPushButton("Deselect All")
+        
+        select_all_btn.clicked.connect(self.select_all_channels)
+        deselect_all_btn.clicked.connect(self.deselect_all_channels)
+        
+        select_buttons_layout.addWidget(select_all_btn)
+        select_buttons_layout.addWidget(deselect_all_btn)
+        select_buttons_layout.addStretch()
+        
+        layout.addLayout(select_buttons_layout)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def select_all_channels(self):
+        """Select all available channels."""
+        for checkbox in self.checkboxes:
+            checkbox.setChecked(True)
+    
+    def deselect_all_channels(self):
+        """Deselect all channels."""
+        for checkbox in self.checkboxes:
+            checkbox.setChecked(False)
 
     def get_selected_channels(self):
         """Return a list of the names of the selected channels."""

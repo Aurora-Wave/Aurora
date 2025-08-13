@@ -759,22 +759,51 @@ class EventTab(QWidget):
         self._setup_scroll()
         self._request_chunk()
     
-    def update_hr_params(self, new_hr_params):
-        """Update HR_GEN parameters and refresh display if needed."""
+    def update_hr_params(self, new_hr_params, force_cache_refresh=False):
+        """Update HR_GEN parameters and refresh display if needed.
+        
+        Args:
+            new_hr_params: New HR generation parameters
+            force_cache_refresh: If True, forces cache invalidation for HR_GEN signals
+        """
+        self.logger.info("=== EVENTTAB UPDATE_HR_PARAMS DEBUG ===")
+        self.logger.info(f"EventTab instance: {id(self)}")
+        self.logger.info(f"New HR params received: {new_hr_params}")
+        self.logger.info(f"Force cache refresh: {force_cache_refresh}")
+        
         try:
             old_params = self.hr_params.copy()
             self.hr_params = new_hr_params.copy()
             
-            self.logger.debug(f"EventTab HR parameters updated from {old_params} to {new_hr_params}")
+            self.logger.info(f"EventTab HR parameters updated from {old_params} to {new_hr_params}")
+            self.logger.info(f"Has channel_names: {hasattr(self, 'channel_names')}")
+            
+            if hasattr(self, 'channel_names'):
+                self.logger.info(f"Channel names: {self.channel_names}")
+                self.logger.info(f"HR_GEN in channels: {'HR_GEN' in self.channel_names}")
+            
+            self.logger.info(f"Has data_manager: {hasattr(self, 'data_manager')}")
+            self.logger.info(f"Data manager value: {getattr(self, 'data_manager', 'NOT_SET')}")
             
             # Check if HR_GEN is in our channels and we have valid data
             if (hasattr(self, 'channel_names') and 'HR_GEN' in self.channel_names 
                 and hasattr(self, 'data_manager') and self.data_manager):
                 
+                self.logger.info(f"Has _selected_idx: {hasattr(self, '_selected_idx')}")
+                if hasattr(self, '_selected_idx'):
+                    self.logger.info(f"Selected idx value: {getattr(self, '_selected_idx', 'NOT_SET')}")
+                
                 # Refresh the current display with new HR parameters
                 if hasattr(self, '_selected_idx') and self._selected_idx is not None:
+                    self.logger.info("Refreshing EventTab display with new HR parameters")
                     self._request_chunk()  # This will use the updated hr_params
-                    self.logger.debug("Refreshed EventTab display with new HR parameters")
+                    self.logger.info("Successfully refreshed EventTab display with new HR parameters")
+                else:
+                    self.logger.info("No selected index - skipping EventTab refresh")
+            else:
+                self.logger.info("HR_GEN not in channels or no data manager - skipping EventTab update")
                     
+            self.logger.info("=== EVENTTAB UPDATE_HR_PARAMS COMPLETE ===")
+            
         except Exception as e:
-            self.logger.error(f"Error updating EventTab HR parameters: {e}")
+            self.logger.error(f"Error updating EventTab HR parameters: {e}", exc_info=True)

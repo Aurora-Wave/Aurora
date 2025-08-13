@@ -37,6 +37,10 @@ class AnalysisTab(QWidget):
         self.session = get_current_session()
         self.config_manager = get_config_manager()
         self.main_window = parent  # Reference to MainWindow for parameter synchronization
+        self.logger.info(f"=== ANALYSISTAB INIT DEBUG ===")
+        self.logger.info(f"AnalysisTab created with parent: {parent}")
+        self.logger.info(f"main_window set to: {self.main_window}")
+        self.logger.info(f"main_window type: {type(self.main_window)}")
         
         # ECG Debug Tracker for monitoring signal consistency
         self.ecg_debug_tracker = ECGDebugTracker("AnalysisTab.ECGDebug")
@@ -344,6 +348,22 @@ class AnalysisTab(QWidget):
                     swt_level=self.level_sb.value(),
                     min_rr_sec=self.dist_sb.value(),
                 )
+                
+                # Notify other tabs about the peak changes
+                self.logger.info(f"=== PEAK MOVEMENT DEBUG ===")
+                self.logger.info(f"main_window exists: {hasattr(self, 'main_window')}")
+                self.logger.info(f"main_window value: {getattr(self, 'main_window', 'NOT_SET')}")
+                
+                try:
+                    if hasattr(self, 'main_window') and self.main_window:
+                        self.logger.info("Calling main_window.update_viewer_tabs_hr_params() for peak movement")
+                        self.main_window.update_viewer_tabs_hr_params(force_cache_refresh=True)
+                        self.logger.info("Successfully notified other tabs about peak movement")
+                    else:
+                        self.logger.warning("main_window not available - cannot notify other tabs about peak movement")
+                except Exception as e:
+                    self.logger.error(f"Error notifying other tabs about peak movement: {e}", exc_info=True)
+                    
                 self.logger.debug("Updated HR_GEN cache after moving peak.")
 
             elif idx_near.size:
@@ -400,6 +420,22 @@ class AnalysisTab(QWidget):
                 swt_level=self.level_sb.value(),
                 min_rr_sec=self.dist_sb.value(),
             )
+            
+            # Notify other tabs about the peak changes
+            self.logger.info(f"=== PEAK ADDITION DEBUG ===")
+            self.logger.info(f"main_window exists: {hasattr(self, 'main_window')}")
+            self.logger.info(f"main_window value: {getattr(self, 'main_window', 'NOT_SET')}")
+            
+            try:
+                if hasattr(self, 'main_window') and self.main_window:
+                    self.logger.info("Calling main_window.update_viewer_tabs_hr_params() for peak addition")
+                    self.main_window.update_viewer_tabs_hr_params()
+                    self.logger.info("Successfully notified other tabs about peak addition")
+                else:
+                    self.logger.warning("main_window not available - cannot notify other tabs about peak addition")
+            except Exception as e:
+                self.logger.error(f"Error notifying other tabs about peak addition: {e}", exc_info=True)
+                
         self.logger.debug("Updated HR_GEN cache after adding peak.")
 
     def _handle_delete_peak(self, event):
@@ -440,6 +476,22 @@ class AnalysisTab(QWidget):
                 swt_level=self.level_sb.value(),
                 min_rr_sec=self.dist_sb.value(),
             )
+            
+            # Notify other tabs about the peak changes
+            self.logger.info(f"=== PEAK DELETION DEBUG ===")
+            self.logger.info(f"main_window exists: {hasattr(self, 'main_window')}")
+            self.logger.info(f"main_window value: {getattr(self, 'main_window', 'NOT_SET')}")
+            
+            try:
+                if hasattr(self, 'main_window') and self.main_window:
+                    self.logger.info("Calling main_window.update_viewer_tabs_hr_params() for peak deletion")
+                    self.main_window.update_viewer_tabs_hr_params()
+                    self.logger.info("Successfully notified other tabs about peak deletion")
+                else:
+                    self.logger.warning("main_window not available - cannot notify other tabs about peak deletion")
+            except Exception as e:
+                self.logger.error(f"Error notifying other tabs about peak deletion: {e}", exc_info=True)
+                
             self.logger.debug("Updated HR_GEN cache after deleting peak.")
 
     def get_hrgen_params(self):
