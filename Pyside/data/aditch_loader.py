@@ -4,6 +4,11 @@ from Pyside.core.signal import Signal, HR_Gen_Signal
 from Pyside.core.comments import EMSComment
 from Pyside.data.base_loader import BaseLoader
 from Pyside.core import get_user_logger
+import datetime as dt
+import mne
+from mne.io.constants import FIFF
+from mne.filter import resample
+
 class AditchLoader(BaseLoader):
     """
     Loader for .adicht files using adi.read_file.
@@ -43,7 +48,7 @@ class AditchLoader(BaseLoader):
                             tick_dt=tick_dt,
                             time_sec=time_sec,
                             user_defined=False))
-
+            break
     def get_metadata(self) -> dict:
         return self.metadata
 
@@ -121,3 +126,110 @@ class AditchLoader(BaseLoader):
         sig.AB = ab
         sig.MarkerData = [c for c in self.comments if c.channel == channel]
         return sig
+    
+def convert_to(
+    self,
+    out_path: str,
+    channels: list[str] | None = None,
+    *,
+    resample_enable: bool = True,
+    target_fs: float | None = None,
+    overwrite: bool = True,
+    patient: str = "AuroraWave",
+    recording: str | None = None,
+    start_datetime: dt.datetime | None = None,
+) -> str:
+    """
+    Export the loaded .adicht file to EDF+ using MNE-Python.
+    """
+    if self.file_data is None:
+        raise RuntimeError("No file loaded. Call `load()` first.")
+
+    # 1. Channel selection
+    ch_list = channels or self.metadata["channels"]
+    ch_type_map = {
+        "ECG": "ecg",
+        "EEG": "eeg",
+        "EMG": "emg",
+        "HR_GEN": "misc",
+        "HR": "misc",
+    }
+
+    # unit_map -> (base_unit, unit_mul)
+    unit_map = {
+        "V":   (FIFF.FIFF_UNIT_V, 0),
+        "mV":  (FIFF.FIFF_UNIT_V, -3),
+        "µV":  (FIFF.FIFF_UNIT_V, -6),
+        "uV":  (FIFF.FIFF_UNIT_V, -6),
+        "bpm": (0, 0),        # UA
+        "mmHg": (0, 0),
+    }
+
+    ch_data, ch_names, ch_types, base_units, unit_muls, fs_list = [], [], [], [], [], []
+
+    for ch_name in ch_list:
+        sig = self.get_full_trace(ch_name)
+        ch_names.append(sig.name)
+        ch_types.append(ch_type_map.get(sig.name.upper(), "misc"))
+        ch_data.append(sig.data.astype(float, copy=False))
+        fs_list.append(float(sig.fs))
+
+        # Unit handling
+        base, mul = unit_map.get(str(sig.units), (0, 0))
+        base_units.append(base)
+        unit_muls.append(mul)
+
+    # 2. Resampling (if needed)
+    if resample_enable:
+        tgt_fs = target_fs or max(fs_list)
+        resampled = []
+        for data, fs in zip(ch_data, fs_list):
+            if fs != tgt_fs:
+                data = resample(data, up=int(tgt_fs), down=int(fs))
+            resampled.append(data)
+        ch_data = resampled
+        sfreq = tgt_fs
+    else:
+        if len(set(fs_list)) > 1:
+            raise ValueError(
+                "Channels have different fs; enable resampling or pick subset with same fs."
+            )
+        sfreq = fs_list[0]
+
+    data_mat = np.vstack(ch_data)  # (n_channels, n_samples)
+
+    # 3. Build Info and Raw
+    info = mne.create_info(ch_names=ch_names, sfreq=sfreq, ch_types=ch_types)
+    info["meas_date"] = start_datetime  # None → now
+    info["subject_info"] = {"his_id": patient}
+    if recording:
+        info["description"] = recording
+
+    # Apply units
+    for idx in range(len(ch_names)):
+        info["chs"][idx]["unit"] = base_units[idx]
+        info["chs"][idx]["unit_mul"] = unit_muls[idx]
+
+    raw = mne.io.RawArray(data_mat, info)
+
+    # 4. Annotations from EMSComment
+    if self.comments:
+        onsets = [c.time_sec for c in self.comments]
+        durations = [0.0] * len(self.comments)
+        descriptions = [c.text for c in self.comments]
+        raw.set_annotations(mne.Annotations(onsets, durations, descriptions))
+
+    # ----------------------------------------------------------
+    # 5. Export to EDF+
+    # ----------------------------------------------------------
+    mne.export.export_raw(
+        raw,
+        out_path,
+        fmt="edf",
+        physical_range="auto",
+        overwrite=overwrite,
+        add_ch_type=False,
+    )
+
+    self.logger.info(f"EDF+ file written to {out_path}")
+    return out_path
