@@ -12,20 +12,21 @@ from Pyside.ui.main_window import MainWindow
 # Initialize logging system early
 from Pyside.core.logging_config import initialize_logging, get_logger
 session = initialize_logging()  # Initialize with automatic user ID
-logger = get_logger("AuroraWave.Main")
+logger = get_logger("AuroraWave2.Main")
 
 # Suppress Qt warnings
 os.environ["QT_LOGGING_RULES"] = "qt.core.qobject.connect.warning=false"
 
 if __name__ == "__main__":
     try:
-        logger.info("AuroraWave application starting...")
+        logger.info("=== Aurora2.0 Starting ===")
+        logger.info("Modular architecture: MainWindow -> Tabs -> PlotContainers")
         
         app = QApplication(sys.argv)
         logger.info("Qt application initialized")
         
         window = MainWindow()
-        logger.info("MainWindow created")
+        logger.info("MainWindow created with modular architecture (3 tabs)")
         
         window.show()
         logger.info("MainWindow displayed - application ready")

@@ -18,7 +18,6 @@ from Pyside.processing.peak_detection_strategies import (
 from Pyside.processing.chunk_loader import ChunkLoader
 from Pyside.processing.marker_extractor import extract_markers, save_markers_to_csv, MARKER_FUNCS
 from Pyside.processing.interval_extractor import extract_event_intervals
-from Pyside.processing.csv_exporter import CSVExporter
 
 __all__ = [
     'ECGAnalyzer',
@@ -33,5 +32,4 @@ __all__ = [
     'save_markers_to_csv',
     'MARKER_FUNCS',
     'extract_event_intervals',
-    'CSVExporter'
 ]

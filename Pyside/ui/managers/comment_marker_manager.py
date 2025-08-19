@@ -1,25 +1,43 @@
 """
-Unified Comment Marker Manager for all visualization tabs.
+Global Comment Marker Manager for all visualization tabs.
 Handles creation, tracking, and cleanup of comment markers across different plot types.
+Supports synchronization between tabs via Qt signals.
 """
 
 import pyqtgraph as pg
-from typing import Dict, List, Tuple, Any, Optional
+from PySide6.QtCore import QObject, Signal
+from typing import Dict, List, Tuple, Any, Optional, Union
 from Pyside.core import get_user_logger
+from Pyside.core.comments import EMSComment
 
 
-class CommentMarkerManager:
+class CommentMarkerManager(QObject):
     """
-    Centralized manager for comment markers across visualization tabs.
-    Handles marker lifecycle, positioning, and cleanup for different plot architectures.
+    Global manager for comment markers across all visualization tabs.
+    Handles marker lifecycle, positioning, and cleanup with synchronization.
     """
+    
+    # Qt Signals for global synchronization
+    comments_updated = Signal(list)  # List[EMSComment] - when comments change
+    comment_added = Signal(object)   # EMSComment - when single comment added
+    comment_removed = Signal(str)    # comment_id - when comment removed
+    markers_refreshed = Signal()     # when all markers need refresh
 
-    def __init__(self, tab_name: str = ""):
-        self.tab_name = tab_name
-        self.logger = get_user_logger(f"CommentMarkerManager.{tab_name}")
+    def __init__(self):
+        super().__init__()
+        self.logger = get_user_logger("GlobalCommentMarkerManager")
 
-        # Marker tracking - supports both single plot and multi-subplot architectures
-        self.comment_markers: Dict[str, List[pg.InfiniteLine]] = {}
+        # Global comment storage
+        self.current_comments: List[EMSComment] = []
+        self.current_file_path: Optional[str] = None
+        
+        # Marker tracking by tab and plot
+        # Structure: {tab_id: {plot_key: [markers]}}
+        self.comment_markers: Dict[str, Dict[str, List[pg.InfiniteLine]]] = {}
+        
+        # Registered plot widgets for updates
+        # Structure: {tab_id: {plot_key: plot_widget}}
+        self.registered_plots: Dict[str, Dict[str, Any]] = {}
 
         # Default marker styling for system comments
         self.default_style = {
@@ -33,22 +51,155 @@ class CommentMarkerManager:
             "z_value": 2,  # Higher z-value to appear on top
         }
 
+    # ========= Global Comment Management =========
+    
+    def set_comments(self, comments: List[EMSComment], file_path: str):
+        """Set global comments and refresh all registered plots."""
+        self.current_comments = comments
+        self.current_file_path = file_path
+        self.logger.info(f"Updated global comments: {len(comments)} comments for {file_path}")
+        
+        # Emit signal to update all plots
+        self.comments_updated.emit(comments)
+        self._refresh_all_registered_plots()
+    
+    def add_comment(self, comment: EMSComment):
+        """Add a new comment and update all plots."""
+        self.current_comments.append(comment)
+        self.logger.info(f"Added comment {comment.comment_id}: {comment.text}")
+        
+        # Emit signals
+        self.comment_added.emit(comment)
+        self.comments_updated.emit(self.current_comments)
+        self._refresh_all_registered_plots()
+    
+    def remove_comment(self, comment_id: str):
+        """Remove a comment and update all plots."""
+        initial_count = len(self.current_comments)
+        self.current_comments = [c for c in self.current_comments if c.comment_id != comment_id]
+        
+        if len(self.current_comments) < initial_count:
+            self.logger.info(f"Removed comment {comment_id}")
+            # Emit signals
+            self.comment_removed.emit(comment_id)
+            self.comments_updated.emit(self.current_comments)
+            self._refresh_all_registered_plots()
+    
+    def get_comments(self) -> List[EMSComment]:
+        """Get current global comments."""
+        return self.current_comments.copy()
+    
+    def register_plot(self, tab_id: str, plot_key: str, plot_widget: Any):
+        """Register a plot widget for automatic updates."""
+        if tab_id not in self.registered_plots:
+            self.registered_plots[tab_id] = {}
+        if tab_id not in self.comment_markers:
+            self.comment_markers[tab_id] = {}
+            
+        self.registered_plots[tab_id][plot_key] = plot_widget
+        self.comment_markers[tab_id][plot_key] = []
+        
+        self.logger.debug(f"Registered plot {tab_id}.{plot_key}")
+        
+        # Refresh this plot with current comments
+        self._refresh_single_plot(tab_id, plot_key)
+    
+    def unregister_plot(self, tab_id: str, plot_key: str):
+        """Unregister a plot widget."""
+        # Clear markers first
+        self._clear_plot_markers(tab_id, plot_key)
+        
+        # Remove from tracking
+        if tab_id in self.registered_plots and plot_key in self.registered_plots[tab_id]:
+            del self.registered_plots[tab_id][plot_key]
+        if tab_id in self.comment_markers and plot_key in self.comment_markers[tab_id]:
+            del self.comment_markers[tab_id][plot_key]
+            
+        self.logger.debug(f"Unregistered plot {tab_id}.{plot_key}")
+    
+    def _refresh_all_registered_plots(self):
+        """Refresh all registered plots with current comments."""
+        for tab_id in self.registered_plots:
+            for plot_key in self.registered_plots[tab_id]:
+                self._refresh_single_plot(tab_id, plot_key)
+        
+        # Emit refresh signal
+        self.markers_refreshed.emit()
+    
+    def _refresh_single_plot(self, tab_id: str, plot_key: str):
+        """Refresh a single plot with current comments."""
+        if (tab_id not in self.registered_plots or 
+            plot_key not in self.registered_plots[tab_id]):
+            return
+            
+        plot_widget = self.registered_plots[tab_id][plot_key]
+        
+        # Clear existing markers
+        self._clear_plot_markers(tab_id, plot_key)
+        
+        # Add new markers if we have comments
+        if self.current_comments:
+            # Convert EMSComment to interval format expected by existing methods
+            intervals = self._convert_comments_to_intervals(self.current_comments)
+            
+            # Use existing method with full time range
+            if hasattr(plot_widget, 'getPlotItem'):
+                # Single plot widget
+                self.add_markers_to_single_plot(
+                    plot_widget, intervals, -float('inf'), float('inf'), 
+                    plot_key, tab_id
+                )
+            else:
+                # Multi-subplot (if needed later)
+                pass
+    
+    def _convert_comments_to_intervals(self, comments: List[EMSComment]) -> List[Dict]:
+        """Convert EMSComment objects to interval format."""
+        intervals = []
+        for comment in comments:
+            interval = {
+                "evento": comment.text,
+                "t_evento": comment.time,
+                "is_user_comment": comment.user_defined,
+                "comment_type": "User" if comment.user_defined else "System"
+            }
+            intervals.append(interval)
+        return intervals
+    
+    def _clear_plot_markers(self, tab_id: str, plot_key: str):
+        """Clear markers from a specific plot."""
+        if (tab_id not in self.comment_markers or 
+            plot_key not in self.comment_markers[tab_id]):
+            return
+            
+        markers = self.comment_markers[tab_id][plot_key]
+        for marker in markers:
+            try:
+                if marker.parentItem():
+                    marker.parentItem().removeItem(marker)
+            except (RuntimeError, AttributeError):
+                pass
+                
+        self.comment_markers[tab_id][plot_key].clear()
+
     def clear_all_markers(self):
-        """Clear all markers from all tracked plots."""
+        """Clear all markers from all tracked plots across all tabs."""
         markers_cleared = 0
 
-        for plot_key, markers in self.comment_markers.items():
-            for marker in markers:
-                try:
-                    if marker.parentItem():
-                        marker.parentItem().removeItem(marker)
-                        markers_cleared += 1
-                except (RuntimeError, AttributeError) as e:
-                    # Marker may already be deleted or invalid
-                    self.logger.debug(f"Marker cleanup warning for {plot_key}: {e}")
+        for tab_id in self.comment_markers:
+            for plot_key in self.comment_markers[tab_id]:
+                markers = self.comment_markers[tab_id][plot_key]
+                for marker in markers:
+                    try:
+                        if marker.parentItem():
+                            marker.parentItem().removeItem(marker)
+                            markers_cleared += 1
+                    except (RuntimeError, AttributeError) as e:
+                        # Marker may already be deleted or invalid
+                        self.logger.debug(f"Marker cleanup warning for {tab_id}.{plot_key}: {e}")
 
         self.comment_markers.clear()
-        self.logger.debug(f"Cleared {markers_cleared} markers from {self.tab_name}")
+        self.logger.debug(f"Cleared {markers_cleared} markers from all tabs")
 
     def add_markers_to_single_plot(
         self,
@@ -57,9 +208,10 @@ class CommentMarkerManager:
         context_start: float,
         context_end: float,
         plot_key: str = "main",
+        tab_id: str = "default",
     ):
         """
-        Add markers to a single plot widget (ViewerTab style).
+        Add markers to a single plot widget.
 
         Args:
             plot_widget: The pyqtgraph PlotWidget
@@ -67,18 +219,23 @@ class CommentMarkerManager:
             context_start: Start of visible time range
             context_end: End of visible time range
             plot_key: Identifier for this plot (for tracking)
+            tab_id: Identifier for the tab containing this plot
         """
+        # Ensure tab structure exists
+        if tab_id not in self.comment_markers:
+            self.comment_markers[tab_id] = {}
+            
         # Clear existing markers for this plot
-        if plot_key in self.comment_markers:
-            for marker in self.comment_markers[plot_key]:
+        if plot_key in self.comment_markers[tab_id]:
+            for marker in self.comment_markers[tab_id][plot_key]:
                 try:
                     if marker.parentItem():
                         marker.parentItem().removeItem(marker)
                 except (RuntimeError, AttributeError):
                     pass
-            self.comment_markers[plot_key] = []
+            self.comment_markers[tab_id][plot_key] = []
         else:
-            self.comment_markers[plot_key] = []
+            self.comment_markers[tab_id][plot_key] = []
 
         # Extract comment data with type information
         comment_data, comment_types = self._extract_comment_data_with_types(intervals)
@@ -100,10 +257,10 @@ class CommentMarkerManager:
                 is_user_comment = comment_types.get(timestamp, False)
                 marker = self._create_marker(timestamp, labels, is_user_comment)
                 plot_item.addItem(marker)
-                self.comment_markers[plot_key].append(marker)
+                self.comment_markers[tab_id][plot_key].append(marker)
                 markers_added += 1
 
-        self.logger.debug(f"Added {markers_added} markers to single plot '{plot_key}'")
+        self.logger.debug(f"Added {markers_added} markers to plot '{tab_id}.{plot_key}'")
 
     def add_markers_to_subplots(
         self,
@@ -291,9 +448,29 @@ class CommentMarkerManager:
         return marker
 
     def get_marker_count(self) -> int:
-        """Get total number of active markers."""
-        return sum(len(markers) for markers in self.comment_markers.values())
+        """Get total number of active markers across all tabs."""
+        total = 0
+        for tab_id in self.comment_markers:
+            for plot_key in self.comment_markers[tab_id]:
+                total += len(self.comment_markers[tab_id][plot_key])
+        return total
 
     def set_style(self, **style_kwargs):
         """Update default marker styling."""
         self.default_style.update(style_kwargs)
+
+
+# ========= Global Instance =========
+
+def get_comment_marker_manager():
+    """Get or create the global CommentMarkerManager instance."""
+    global _comment_marker_manager
+    if '_comment_marker_manager' not in globals():
+        globals()['_comment_marker_manager'] = CommentMarkerManager()
+    return _comment_marker_manager
+
+# Create the global instance immediately
+try:
+    _comment_marker_manager = CommentMarkerManager()
+except Exception:
+    _comment_marker_manager = None

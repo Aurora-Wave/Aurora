@@ -68,6 +68,11 @@ class DataManager:
         self.logger = get_user_logger(self.__class__.__name__)
         self.session = get_current_session()
         self.config_manager = get_config_manager()
+        
+        # Comment management integration
+        from Pyside.core.comments import get_comment_manager
+        self.comment_manager = get_comment_manager()
+        self.comment_manager.set_data_manager(self)  # Set reference for direct cache modification
 
     def load_file(self, path: str) -> None:
         """
@@ -105,7 +110,7 @@ class DataManager:
             "loader": loader,
             "signal_cache": {},
             "metadata": loader.get_metadata(),
-            "comments": loader.get_all_comments(),
+            "comments": self.comment_manager.get_all_comments_from_loader(loader),  # Load from loader via CommentManager
             "hr_cache": {},  # dict: key (config tuple) -> Signal
             "hr_cache_keys": deque(maxlen=max_hr_cache),  # order of keys for eviction
             "intervals_cache": None,  # Cache for extracted intervals
@@ -231,9 +236,25 @@ class DataManager:
 
     def get_comments(self, path: str):
         """
-        Get all annotations/comments for a file.
+        Get all comments for a file (cached in DataManager).
         """
         return self._files[path]["comments"]
+    
+    
+    def get_comments_in_range(self, path: str, start_time: float, end_time: float):
+        """
+        Get comments within a specific time range from cache.
+        
+        Args:
+            path: File path
+            start_time: Start time in seconds
+            end_time: End time in seconds
+        
+        Returns:
+            list: Filtered comments from cache
+        """
+        current_comments = self._files[path]["comments"]
+        return self.comment_manager.get_comments_in_range(current_comments, start_time, end_time)
 
     def get_metadata(self, path: str):
         """
