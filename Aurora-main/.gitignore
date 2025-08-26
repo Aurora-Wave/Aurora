@@ -1,0 +1,19 @@
+/dash/
+
+#Ignore Virtual Environment 
+env/
+.env/
+venv/
+.venv/
+
+#VScode config
+.vscode/
+
+
+
+
+# Build apps
+build
+
+# Cache
+__pycache__/

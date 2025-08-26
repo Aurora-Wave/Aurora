@@ -8,5 +8,6 @@ from .peak_detection_strategies import (
     WaveletDWTStrategy,
     ScipyBasicStrategy,
     SimpleThresholdStrategy,
-    strategy_registry
+    strategy_registry,
 )
+from .chunk_loader import ChunkLoader, ChunkCache
