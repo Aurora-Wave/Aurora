@@ -86,7 +86,7 @@ class PlotContainerWidget(QWidget):
 
     def setup_ui(self):
         """Setup the plots area only - navigation handled by parent tab."""
-        main_layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)g
         main_layout.setContentsMargins(5, 5, 5, 5)
 
         # Only plots area - no navigation controls
