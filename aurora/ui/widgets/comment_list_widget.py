@@ -184,7 +184,7 @@ class CommentListWidget(QWidget):
         
         # Table settings
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)  # Allow multiple selection
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
         
@@ -328,14 +328,24 @@ class CommentListWidget(QWidget):
         
     def on_selection_changed(self):
         """Handle table selection change."""
-        has_selection = bool(self.table.selectedItems())
-        self.edit_button.setEnabled(has_selection)
+        selected_comments = self.get_selected_comments()
+        has_selection = len(selected_comments) > 0
+        
+        # Enable/disable buttons based on selection
+        self.edit_button.setEnabled(len(selected_comments) == 1)  # Edit only works with single selection
         self.delete_button.setEnabled(has_selection)
         
-        if has_selection:
-            comment = self.get_selected_comment()
-            if comment:
-                self.comment_selected.emit(comment)
+        # Update delete button text to reflect selection count
+        if len(selected_comments) == 0:
+            self.delete_button.setText("Delete")
+        elif len(selected_comments) == 1:
+            self.delete_button.setText("Delete")
+        else:
+            self.delete_button.setText(f"Delete ({len(selected_comments)})")
+        
+        # Emit signal for single selection (for navigation)
+        if len(selected_comments) == 1:
+            self.comment_selected.emit(selected_comments[0])
     
     def on_item_clicked(self, item):
         """Handle click on table item."""
@@ -418,6 +428,25 @@ class CommentListWidget(QWidget):
                 return text_item.data(Qt.UserRole)
         return None
     
+    def get_selected_comments(self) -> List[EMSComment]:
+        """Get all currently selected comments."""
+        selected_comments = []
+        selected_rows = set()
+        
+        # Get all selected items and extract unique row indices
+        for item in self.table.selectedItems():
+            selected_rows.add(item.row())
+        
+        # Collect comments from selected rows
+        for row in selected_rows:
+            text_item = self.table.item(row, 0)  # Comment stored in text column
+            if text_item:
+                comment = text_item.data(Qt.UserRole)
+                if comment:
+                    selected_comments.append(comment)
+        
+        return selected_comments
+    
     def add_comment(self):
         """Add a new comment using comment manager."""
         if not self.data_manager or not self.file_path:
@@ -484,39 +513,69 @@ class CommentListWidget(QWidget):
                 QMessageBox.critical(self, "Error", f"Failed to update comment: {e}")
     
     def delete_comment(self):
-        """Delete the selected comment."""
-        comment = self.get_selected_comment()
-        if not comment:
+        """Delete the selected comment(s)."""
+        selected_comments = self.get_selected_comments()
+        if not selected_comments:
             return
         
         if not self.data_manager or not self.file_path:
             QMessageBox.warning(self, "Error", "No file loaded.")
             return
         
-        # Confirm deletion
-        reply = QMessageBox.question(
-            self,
-            "Confirm Delete",
-            f"Are you sure you want to delete the comment at {comment.time:.2f}s?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+        # Confirm deletion with appropriate message for single/multiple selection
+        if len(selected_comments) == 1:
+            comment = selected_comments[0]
+            reply = QMessageBox.question(
+                self,
+                "Confirm Delete",
+                f"Are you sure you want to delete the comment at {comment.time:.2f}s?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+        else:
+            reply = QMessageBox.question(
+                self,
+                "Confirm Delete",
+                f"Are you sure you want to delete {len(selected_comments)} selected comments?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
         
         if reply == QMessageBox.Yes:
             try:
-                # Remove comment through CommentManager
                 from aurora.core.comments import get_comment_manager
                 comment_manager = get_comment_manager()
                 
-                # Debug: Log the comment_id we're trying to delete
-                self.logger.debug(f"Attempting to delete comment - ID: '{comment.comment_id}' (type: {type(comment.comment_id)}) at time {comment.time:.2f}s")
+                deleted_count = 0
+                failed_count = 0
                 
-                comment_manager.request_delete_comment(self.file_path, comment.comment_id)
-                self.logger.info(f"Delete request sent for comment {comment.comment_id} at {comment.time:.2f}s")
+                # Delete all selected comments
+                for comment in selected_comments:
+                    try:
+                        # Debug: Log the comment_id we're trying to delete
+                        self.logger.debug(f"Attempting to delete comment - ID: '{comment.comment_id}' (type: {type(comment.comment_id)}) at time {comment.time:.2f}s")
+                        
+                        comment_manager.request_delete_comment(self.file_path, comment.comment_id)
+                        deleted_count += 1
+                        self.logger.info(f"Delete request sent for comment {comment.comment_id} at {comment.time:.2f}s")
+                        
+                    except Exception as e:
+                        failed_count += 1
+                        self.logger.error(f"Error deleting comment {comment.comment_id}: {e}")
                 
+                # Show summary if there were failures
+                if failed_count > 0:
+                    QMessageBox.warning(
+                        self, 
+                        "Deletion Summary", 
+                        f"Deleted {deleted_count} comments successfully.\n{failed_count} comments failed to delete."
+                    )
+                elif len(selected_comments) > 1:
+                    self.logger.info(f"Successfully deleted {deleted_count} comments")
+                    
             except Exception as e:
-                self.logger.error(f"Error deleting comment: {e}")
-                QMessageBox.critical(self, "Error", f"Failed to delete comment: {e}")
+                self.logger.error(f"Error during mass deletion: {e}")
+                QMessageBox.critical(self, "Error", f"Failed to delete comments: {e}")
     
     def navigate_to_comment(self, comment: EMSComment):
         """Navigate to a specific comment and select it in table."""

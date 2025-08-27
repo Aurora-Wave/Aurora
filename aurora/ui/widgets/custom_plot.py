@@ -354,3 +354,20 @@ class CustomPlot(QWidget):
             
         except Exception as e:
             self.logger.error(f"Error during CustomPlot cleanup: {e}")
+    
+    # ========= Data Management =========
+    
+    def update_data(self, time_data, signal_data):
+        """Update plot with new data (called by PlotContainerWidget)."""
+        try:
+            # Clear existing data
+            self.plot_widget.clear()
+            
+            # Create pen with current style
+            pen = self.style_manager.create_plot_pen(self.signal_name, self.custom_style)
+            
+            # Plot new data
+            self.curve = self.plot_widget.plot(time_data, signal_data, pen=pen, name=self.signal_name)
+            
+        except Exception as e:
+            self.logger.error(f"Error updating data for {self.signal_name}: {e}")

@@ -811,7 +811,7 @@ class PlotContainerWidget(QWidget):
 
                 if chunk_data.size == 0:
                     # No data for this channel - clear the plot
-                    plot_widget.plot.clear()
+                    plot_widget.plot_widget.clear()
                     continue
 
                 try:
@@ -831,12 +831,15 @@ class PlotContainerWidget(QWidget):
                     # Create time axis
                     t = np.arange(len(chunk_data)) / fs + start_sec
 
-                    # Update plot data efficiently
-                    plot_widget.plot.clear()
-                    plot_widget.plot.plot(t, chunk_data, pen=plot_widget.plot_style.pen)
+                    # Update plot data efficiently - use correct API for CustomPlot
+                    plot_widget.plot_widget.clear()
+                    
+                    # Get pen from style manager (CustomPlot architecture)
+                    pen = plot_widget.style_manager.create_plot_pen(plot_widget.signal_name, plot_widget.custom_style)
+                    plot_widget.plot_widget.plot(t, chunk_data, pen=pen)
 
                     # Set plot ranges
-                    plot_widget.plot.setXRange(start_sec, end_sec, padding=0)
+                    plot_widget.plot_widget.setXRange(start_sec, end_sec, padding=0)
 
                     # Apply Y range if available
                     if (
@@ -846,7 +849,7 @@ class PlotContainerWidget(QWidget):
                         if hasattr(plot_widget, "y_min") and hasattr(
                             plot_widget, "y_max"
                         ):
-                            plot_widget.plot.setYRange(
+                            plot_widget.plot_widget.setYRange(
                                 plot_widget.y_min, plot_widget.y_max
                             )
                         else:
@@ -856,7 +859,7 @@ class PlotContainerWidget(QWidget):
                                     chunk_data
                                 )
                                 margin = (y_max - y_min) * 0.1 if y_max > y_min else 1.0
-                                plot_widget.plot.setYRange(
+                                plot_widget.plot_widget.setYRange(
                                     y_min - margin, y_max + margin
                                 )
 
@@ -870,9 +873,8 @@ class PlotContainerWidget(QWidget):
                     )
                     continue
 
-            # Update comment markers for current time window
-            if hasattr(self, "_update_comment_markers"):
-                self._update_comment_markers()
+            # Comments are handled by VisualizationBaseTab calling refresh_comment_display()
+            # No need to update here - will be refreshed automatically
 
         except Exception as e:
             self.logger.error(f"Failed to update chunk data: {e}", exc_info=True)

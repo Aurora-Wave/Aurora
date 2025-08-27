@@ -133,9 +133,10 @@ class ChunkLoader(QObject):
         self.request_timer.timeout.connect(self._process_pending_request)
         self.pending_request: Optional[Tuple] = None
 
-        # Configuration
-        self.throttle_delay_ms = 50  # Delay between requests
-        self.max_points_per_plot = 5000  # Points before downsampling
+        # Configuration - optimized for responsive navigation
+        self.throttle_delay_ms = 5  # Minimal delay for responsive UI (was 50ms)
+        # Unified limit for all signals - optimized for performance and visual quality
+        self.max_points_per_plot = 20000  # Points before downsampling - all signals equal
 
         self.logger.debug(f"ChunkLoader initialized for session {session.session_id}")
 
@@ -322,7 +323,7 @@ class ChunkLoader(QObject):
                 chunk = data[start_idx:end_idx]
 
                 # Apply downsampling if chunk is too large
-                chunk_downsampled = self._apply_downsampling(chunk, fs, start_sec)
+                chunk_downsampled = self._apply_downsampling(chunk, fs, start_sec, ch)
 
                 results[ch] = chunk_downsampled
 
@@ -334,33 +335,66 @@ class ChunkLoader(QObject):
         return results
 
     def _apply_downsampling(
-        self, chunk: np.ndarray, fs: float, start_sec: float
+        self, chunk: np.ndarray, fs: float, start_sec: float, channel_name: str = ""
     ) -> np.ndarray:
         """
-        Apply intelligent downsampling to chunk data for visualization.
-
+        Apply uniform downsampling to chunk data for visualization performance.
+        
+        TODO: FIXME - DOWNSAMPLING ALGORITHM IS BROKEN
+        Current algorithm causes high-resolution signals (ECG) to display "at half size"
+        while lower resolution signals display correctly.
+        
+        TEMPORARY SOLUTION: Return original chunk without downsampling
+        This ensures all signals display correctly but may impact performance
+        with very large datasets.
+        
+        ISSUES TO FIX:
+        1. Algorithm treats all signals equally but results are inconsistent
+        2. High-res signals (ECG 1000Hz) appear truncated/compressed
+        3. Low-res signals (others) appear normal
+        4. Possible issue with time axis alignment or plot range setting
+        
         Args:
             chunk: Original chunk data
             fs: Sampling frequency
             start_sec: Start time for time axis generation
+            channel_name: Name of the channel (for logging only)
 
         Returns:
-            Downsampled chunk data
+            Original chunk data (no downsampling applied)
         """
-        if len(chunk) <= self.max_points_per_plot:
-            return chunk
-
-        # Calculate downsampling factor
-        step = int(np.ceil(len(chunk) / self.max_points_per_plot))
-
-        # Apply downsampling
-        downsampled = chunk[::step]
-
+        # TEMPORARY: Return original data without downsampling
         self.logger.debug(
-            f"Downsampled chunk: {len(chunk)} -> {len(downsampled)} points (step={step})"
+            f"TEMP BYPASS: {channel_name} returning {len(chunk)} points "
+            f"(fs={fs:.1f}Hz) - no downsampling applied"
         )
-
-        return downsampled
+        
+        return chunk
+        
+        # BROKEN CODE DISABLED:
+        # if len(chunk) <= self.max_points_per_plot:
+        #     return chunk
+        # 
+        # # Calculate downsampling factor
+        # step = max(1, int(np.ceil(len(chunk) / self.max_points_per_plot)))
+        # 
+        # # Apply intelligent decimation
+        # if step <= 2:
+        #     # Simple decimation for small factors
+        #     downsampled = chunk[::step]
+        # else:
+        #     # For larger factors, use average-based decimation
+        #     trim_length = len(chunk) - (len(chunk) % step)
+        #     trimmed_chunk = chunk[:trim_length]
+        #     reshaped = trimmed_chunk.reshape(-1, step)
+        #     downsampled = np.mean(reshaped, axis=1)
+        #     
+        #     # Add any remaining samples
+        #     if trim_length < len(chunk):
+        #         remaining_mean = np.mean(chunk[trim_length:])
+        #         downsampled = np.append(downsampled, remaining_mean)
+        # 
+        # return downsampled
 
     def _generate_cache_key(
         self,
@@ -395,12 +429,12 @@ class ChunkLoader(QObject):
 
     def set_max_points(self, max_points: int) -> None:
         """Set maximum points per plot before downsampling."""
-        self.max_points_per_plot = max(1000, max_points)  # Minimum 1000 points
+        self.max_points_per_plot = max(10000, max_points)  # Minimum 10k points for good visual quality
         self.logger.debug(f"Max points per plot set to: {self.max_points_per_plot}")
 
     def set_throttle_delay(self, delay_ms: int) -> None:
         """Set throttling delay for chunk requests."""
-        self.throttle_delay_ms = max(10, delay_ms)  # Minimum 10ms
+        self.throttle_delay_ms = max(1, delay_ms)  # Minimum 1ms for responsiveness
         self.logger.debug(f"Throttle delay set to: {self.throttle_delay_ms}ms")
 
     def cleanup(self) -> None:
