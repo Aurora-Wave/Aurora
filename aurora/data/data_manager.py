@@ -16,11 +16,14 @@ Example:
 """
 
 import os
+import bisect
 from collections import deque
 from typing import Dict, Any, List, Optional, Tuple, Union, TYPE_CHECKING
 from pathlib import Path
+from PySide6.QtCore import QObject, Signal as QtSignal
 from aurora.core import get_user_logger, get_current_session
 from aurora.core.config_manager import get_config_manager
+from aurora.core.comments import get_comment_manager, EMSComment
 from aurora.data.aditch_loader import AditchLoader
 
 if TYPE_CHECKING:
@@ -30,7 +33,7 @@ if TYPE_CHECKING:
 # from .edf_loader import EDFLoader
 
 
-class DataManager:
+class DataManager(QObject):
     """
     Centralized data management for physiological signal files.
 
@@ -52,6 +55,12 @@ class DataManager:
         >>> ecg = dm.get_trace("/path/to/data.adicht", "ECG")
         >>> hr = dm.get_trace("/path/to/data.adicht", "HR_gen", wavelet="db4", level=5)
     """
+    
+    # Comment change notification signals
+    comments_changed = QtSignal(str)  # (file_path)
+    comment_added = QtSignal(str, object)  # (file_path, comment)
+    comment_updated = QtSignal(str, object)  # (file_path, comment)
+    comment_removed = QtSignal(str, str)  # (file_path, comment_id)
 
     def __init__(self) -> None:
         """
@@ -59,7 +68,8 @@ class DataManager:
 
         Sets up file storage, loader registry, logging, and configuration management.
         Initializes empty caches for efficient data access.
-        """     
+        """
+        super().__init__()
         self._files: Dict[str, Dict[str, Any]] = {}
         self._loader_registry: Dict[str, type] = {
             ".adicht": AditchLoader,
@@ -69,10 +79,15 @@ class DataManager:
         self.session = get_current_session()
         self.config_manager = get_config_manager()
         
-        # Comment management integration
-        from aurora.core.comments import get_comment_manager
-        self.comment_manager = get_comment_manager()
-        self.comment_manager.set_data_manager(self)  # Set reference for direct cache modification
+        # Time range cache for performance optimization during navigation
+        self._time_cache = {}  # path -> {'start_time', 'end_time', 'comments', 'cache_version'}
+        self._cache_version = 0  # Incremented when comments change
+        
+        # Subscribe to CommentManager events
+        comment_manager = get_comment_manager()
+        comment_manager.comment_create_requested.connect(self._handle_comment_create)
+        comment_manager.comment_update_requested.connect(self._handle_comment_update)
+        comment_manager.comment_delete_requested.connect(self._handle_comment_delete)
 
     def load_file(self, path: str) -> None:
         """
@@ -101,26 +116,25 @@ class DataManager:
 
         loader = self._loader_registry[ext]()
         loader.load(path)
-        #self.session.log_action(
-        #    f"File loaded by DataManager: {os.path.basename(path)}", self.logger)
-        # Initialize caches and metadata for this file
         max_hr_cache = self.config_manager.get_hr_cache_size()
-        # Load comments from loader
-        loaded_comments = self.comment_manager.get_all_comments_from_loader(loader)
+
+        # Load comments directly from loader
+        loaded_comments = loader.get_all_comments()
+        
+        # Build ID → Comment mapping for fast CRUD operations
+        id_to_comment_map = {str(c.comment_id): c for c in loaded_comments}
         
         self._files[path] = {
             "loader": loader,
             "signal_cache": {},
             "metadata": loader.get_metadata(),
-            "comments": loaded_comments,  # Store for compatibility
+            "comments": loaded_comments,  # Sorted by time for binary search
+            "id_to_comment": id_to_comment_map,  # Fast ID → Comment lookup
             "hr_cache": {},  # dict: key (config tuple) -> Signal
             "hr_cache_keys": deque(maxlen=max_hr_cache),  # order of keys for eviction
             "intervals_cache": None,  # Cache for extracted intervals
             "intervals_cache_key": None,  # Key for cache invalidation
         }
-        
-        # OPTIMIZATION: Build optimized index in CommentManager
-        self.comment_manager.load_file_comments(path, loaded_comments)
         # If the file already has HR_gen, cache it as canonical
         if "HR_gen" in self._files[path]["metadata"].get("channels", []):
             sig = loader.get_full_trace("HR_gen")
@@ -242,8 +256,66 @@ class DataManager:
     def get_comments(self, path: str):
         """
         Get all comments for a file (cached in DataManager).
+        Comments are guaranteed to be sorted by time for O(log n) binary search.
         """
         return self._files[path]["comments"]
+    
+    def get_comments_in_time_range(self, path: str, start_time: float, end_time: float) -> List[EMSComment]:
+        """
+        Get comments in time range with time cache optimization for slider navigation.
+        Uses cache to avoid repeated binary searches when time ranges overlap.
+        
+        Args:
+            path: File path
+            start_time: Start time in seconds
+            end_time: End time in seconds
+            
+        Returns:
+            List of EMSComment objects in time range, already sorted by time
+        """
+        if path not in self._files:
+            return []
+            
+        comments = self._files[path]["comments"]
+        if not comments:
+            return []
+        
+        # Check cache for overlapping range
+        cache_key = path
+        if cache_key in self._time_cache:
+            cache_entry = self._time_cache[cache_key]
+            # Cache hit if ranges overlap and cache is current
+            if (cache_entry['cache_version'] == self._cache_version and
+                start_time >= cache_entry['start_time'] and
+                end_time <= cache_entry['end_time']):
+                # Filter cached comments to exact range
+                return [c for c in cache_entry['comments'] 
+                       if start_time <= c.time <= end_time]
+        
+        # Cache miss - perform binary search and cache larger range
+        times = [c.time for c in comments]
+        start_idx = bisect.bisect_left(times, start_time)
+        end_idx = bisect.bisect_right(times, end_time)
+        
+        # Cache a larger range (2x) to improve future hit rate during navigation
+        cache_expansion = (end_time - start_time) * 0.5  # Expand by 50% on each side
+        cache_start = max(0, start_time - cache_expansion)
+        cache_end = end_time + cache_expansion
+        
+        # Get expanded range for cache
+        cache_start_idx = bisect.bisect_left(times, cache_start)
+        cache_end_idx = bisect.bisect_right(times, cache_end)
+        cached_comments = comments[cache_start_idx:cache_end_idx]
+        
+        # Update cache
+        self._time_cache[cache_key] = {
+            'start_time': cache_start,
+            'end_time': cache_end,
+            'comments': cached_comments,
+            'cache_version': self._cache_version
+        }
+        
+        return comments[start_idx:end_idx]
     
     
     def get_comments_in_range(self, path: str, start_time: float, end_time: float):
@@ -258,7 +330,32 @@ class DataManager:
         Returns:
             list: Filtered comments using O(log n + k) binary search
         """
-        return self.comment_manager.get_comments_in_time_window(path, start_time, end_time)
+        return self.get_comments_in_time_range(path, start_time, end_time)
+    
+    def get_next_comment_id(self, path: str) -> int:
+        """
+        Generate next unique comment ID for this file.
+        Uses max(existing_ids) + 1 to ensure consistency.
+        
+        Args:
+            path: File path
+            
+        Returns:
+            int: Next available comment ID
+        """
+        if path not in self._files:
+            return 1
+            
+        comments = self._files[path]["comments"]
+        if not comments:
+            return 1
+            
+        # Get maximum existing ID
+        max_id = max(int(c.comment_id) for c in comments)
+        next_id = max_id + 1
+        
+        self.logger.debug(f"Generated next comment ID: {next_id} (max existing: {max_id})")
+        return next_id
 
     def get_metadata(self, path: str):
         """
@@ -420,3 +517,144 @@ class DataManager:
         """Clear intervals cache for all files."""
         for path in self._files:
             self.clear_intervals_cache(path)
+    
+
+####### Comments Signal Response ######
+
+
+
+    def _invalidate_time_cache(self, file_path: str = None):
+        """Invalidate time cache when comments change"""
+        self._cache_version += 1
+        if file_path and file_path in self._time_cache:
+            del self._time_cache[file_path]
+        
+    def _handle_comment_create(self, file_path: str, comment_data: dict):
+        """Handle comment creation request from CommentManager"""
+        if file_path not in self._files:
+            self.logger.error(f"File {file_path} not loaded")
+            return
+            
+        # Generate unique ID for this file
+        next_id = self.get_next_comment_id(file_path)
+        
+        # Create EMSComment from data with generated ID
+        comment = EMSComment(
+            text=comment_data['text'],
+            time_sec=comment_data['time_sec'],
+            comment_id=next_id,
+            user_defined=comment_data['user_defined'],
+            label=comment_data['label']
+        )
+        
+        # Insert in sorted position for O(log n) binary search later
+        comments = self._files[file_path]["comments"]
+        insert_pos = bisect.bisect_left([c.time for c in comments], comment.time)
+        comments.insert(insert_pos, comment)
+        
+        # Update ID → Comment mapping
+        id_to_comment = self._files[file_path]["id_to_comment"]
+        id_to_comment[str(next_id)] = comment
+        
+        # Invalidate cache after modification
+        self._invalidate_time_cache(file_path)
+        
+        # Emit signals
+        self.comment_added.emit(file_path, comment)
+        self.comments_changed.emit(file_path)
+        
+        self.logger.info(f"Comment {next_id} inserted at position {insert_pos} (time {comment.time:.2f}s) in {file_path}")
+        
+    def _handle_comment_update(self, file_path: str, comment_id, updates: dict):
+        """Handle comment update request from CommentManager"""
+        if file_path not in self._files:
+            self.logger.error(f"File {file_path} not loaded")
+            return
+            
+        # Find comment using fast ID mapping
+        if comment_id is None or comment_id == "":
+            self.logger.warning(f"Cannot update comment with None/empty ID")
+            return
+            
+        target_id_str = str(comment_id)
+        id_to_comment = self._files[file_path]["id_to_comment"]
+        
+        # Fast O(1) lookup by ID
+        comment = id_to_comment.get(target_id_str)
+        if not comment:
+            available_ids = list(id_to_comment.keys())[:5]  # First 5 IDs
+            self.logger.warning(f"Comment '{target_id_str}' not found for update. Available IDs (first 5): {available_ids}")
+            return
+        
+        # Find position in sorted list (only when time changes)
+        comments = self._files[file_path]["comments"]
+        comment_index = comments.index(comment)  # O(n) but only when needed
+            
+        # If time changes, need to reposition for sorted order
+        if 'time_sec' in updates:
+            # Remove from current position
+            comments.pop(comment_index)
+            
+            # Update time
+            comment.time = updates['time_sec']
+            
+            # Insert at new sorted position
+            insert_pos = bisect.bisect_left([c.time for c in comments], comment.time)
+            comments.insert(insert_pos, comment)
+            
+            self.logger.debug(f"Comment {comment_id} repositioned from {comment_index} to {insert_pos}")
+        
+        # Update other fields
+        if 'text' in updates:
+            comment.text = updates['text']
+        if 'label' in updates:
+            comment.label = updates['label']
+            
+        # Invalidate cache after modification
+        self._invalidate_time_cache(file_path)
+        
+        # Emit signals
+        self.comment_updated.emit(file_path, comment)
+        self.comments_changed.emit(file_path)
+        
+        self.logger.info(f"Comment {comment_id} updated in {file_path}")
+        
+    def _handle_comment_delete(self, file_path: str, comment_id):
+        """Handle comment deletion request from CommentManager"""
+        # Debug: Log what we receive
+        self.logger.debug(f"_handle_comment_delete called with: file_path='{file_path}', comment_id='{comment_id}' (type: {type(comment_id)})")
+        
+        if file_path not in self._files:
+            self.logger.error(f"File {file_path} not loaded")
+            return
+            
+        # Handle different ID types and None/empty cases
+        if comment_id is None or comment_id == "":
+            self.logger.warning(f"Cannot delete comment with None/empty ID")
+            return
+            
+        target_id_str = str(comment_id)
+        
+        # Use fast ID mapping to find comment
+        id_to_comment = self._files[file_path]["id_to_comment"]
+        comment = id_to_comment.get(target_id_str)
+        
+        if not comment:
+            available_ids = list(id_to_comment.keys())[:5]  # First 5 IDs
+            self.logger.warning(f"Comment '{target_id_str}' not found for removal. Available IDs (first 5): {available_ids}")
+            self.logger.warning(f"Total comments in mapping: {len(id_to_comment)}")
+            return
+        
+        # Remove from both data structures
+        comments = self._files[file_path]["comments"]
+        comments.remove(comment)  # O(n) removal from sorted list
+        del id_to_comment[target_id_str]  # O(1) removal from mapping
+        
+        # Invalidate cache after modification
+        self._invalidate_time_cache(file_path)
+        
+        # Emit signals
+        self.comment_removed.emit(file_path, str(comment_id))
+        self.comments_changed.emit(file_path)
+        
+        self.logger.info(f"Comment {target_id_str} removed from {file_path} (time: {comment.time:.2f}s)")

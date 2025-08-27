@@ -107,16 +107,6 @@ class CustomPlot(QWidget):
         self.signal_selector.currentTextChanged.connect(self.on_signal_changed)
         self.signal_selector.setToolTip("Change signal (click to select)")
         
-        # Signal name label (clickable for color change)
-        #self.signal_label = QLabel(self.signal_name)
-        #self.signal_label.setStyleSheet(
-        #    f"QLabel {{ font-weight: bold; color: {self.current_style.pen_color}; "
-        #    "border: 1px solid transparent; padding: 1px; }"
-        #    "QLabel:hover { border: 1px solid #666; background-color: #333; }"
-        #)
-        #self.signal_label.setToolTip("Click to change color")
-        #self.signal_label.mousePressEvent = self.on_label_clicked
-        
         # Remove button
         self.btn_remove = QPushButton("✕")
         self.btn_remove.setFixedSize(30, 20)
@@ -126,7 +116,6 @@ class CustomPlot(QWidget):
         
         controls_layout.addWidget(self.drag_label)
         controls_layout.addWidget(self.signal_selector)
-        #controls_layout.addWidget(self.signal_label)
         controls_layout.addWidget(self.btn_remove)
         controls_layout.addStretch()
         # ========= Control area (left side) END =========
@@ -196,12 +185,7 @@ class CustomPlot(QWidget):
         )
         
         PlotContextMenu.show_menu(menu, self.plot_widget, position)
-        
-    #def on_label_clicked(self, event):
-    #    """Handle signal label click for color change."""
-    #    if event.button() == Qt.LeftButton:
-    #        self.change_color()
-    
+
     def on_signal_changed(self, new_signal: str):
         """Handle signal change from dropdown."""
         if new_signal and new_signal != self.signal_name:
@@ -274,7 +258,6 @@ class CustomPlot(QWidget):
         """Update plot data."""
         try:
             self.curve.setData(time_data, y_data)
-            self.logger.debug(f"Updated data for {self.signal_name}: {len(time_data)} points, time range: {time_data[0]:.1f}-{time_data[-1]:.1f}s")
         except Exception as e:
             self.logger.error(f"Error updating data for {self.signal_name}: {e}")
     

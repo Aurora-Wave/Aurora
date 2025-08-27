@@ -1,3 +1,0 @@
-uploaded_files/AFT_20240816_170-JV.npz filter=lfs diff=lfs merge=lfs -text
-*.npz filter=lfs diff=lfs merge=lfs -text
-*.adicht filter=lfs diff=lfs merge=lfs -text

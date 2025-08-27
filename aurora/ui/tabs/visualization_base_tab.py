@@ -59,18 +59,19 @@ class VisualizationBaseTab(QWidget):
         self.session = session
         self.logger = logging.getLogger(f"aurora.ui.{self.__class__.__name__}")
 
-        # Comment management - only consume, don't manage
+        # Comment management - access through DataManager signals
         self.comment_manager = get_comment_manager()
 
-        # Connect CommentManager signals to refresh plot markers
-        self.comment_manager.comment_added.connect(self._on_comment_changed)
-        self.comment_manager.comment_updated.connect(self._on_comment_changed)
-        self.comment_manager.comment_removed.connect(self._on_comment_changed)
+        # Connect to DataManager comment signals for plot refreshes
+        # Note: Connection will be made in display_signals when data_manager is available
 
         # State tracking
         self.is_data_loaded = False
         self.current_signals: List[str] = []
         self.current_parameters: Dict = {}
+        
+        # HR parameters for ChunkLoader - initialize to avoid AttributeError
+        self.hr_params: Dict = {}
 
         # Layout components
         self.main_layout = QVBoxLayout(self)
@@ -369,6 +370,14 @@ class VisualizationBaseTab(QWidget):
             # Update internal state
             self.current_signals = target_signals.copy()
             self.current_parameters = hr_params.copy()
+            self.hr_params = hr_params.copy()  # Store for ChunkLoader
+
+            # Connect to DataManager signals if not already connected
+            try:
+                data_manager.comments_changed.connect(self._on_comments_changed)
+            except TypeError:
+                # Already connected, which is fine
+                pass
 
             # Update tab data (delegates to subclass implementation)
             success = self.update_tab_data(
@@ -590,13 +599,15 @@ class VisualizationBaseTab(QWidget):
         """Get current comments for the active file (read-only access)."""
         if not self.session or not self.session.file_path:
             return []
-        return self.comment_manager.get_all_comments_for_file(self.session.file_path)
+        return self.session.data_manager.get_comments(self.session.file_path)
 
     def get_comments_in_time_range(self, start_time: float, end_time: float) -> List:
         """Get comments within a specific time range using optimized binary search."""
         if not self.session or not self.session.file_path:
             return []
-        return self.comment_manager.get_comments_in_time_window(
+        
+        # Use DataManager's optimized binary search with caching
+        return self.session.data_manager.get_comments_in_time_range(
             self.session.file_path, start_time, end_time
         )
 
@@ -620,7 +631,7 @@ class VisualizationBaseTab(QWidget):
                 f"Refreshed {len(visible_comments)} comment markers for time window"
             )
 
-    def _on_comment_changed(self, file_path: str, *args):
+    def _on_comments_changed(self, file_path: str):
         """Handle comment changes (add/update/remove) by refreshing markers."""
         # Only refresh if the change affects our current file
         if self.session and self.session.file_path == file_path:
