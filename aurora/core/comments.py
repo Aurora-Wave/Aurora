@@ -7,12 +7,10 @@ class EMSComment:
     Includes timing, raw text, and metadata to assist with navigation, editing, and labeling.
     """
 
-    def __init__(self, text, tick_position, comment_id, tick_dt, time_sec, user_defined=False, label=None):
-        self.text = text                    # Original comment text (raw from LabChart)
-        self.tick_position = tick_position  # Index of the sample tick
+    def __init__(self, text, time_sec, comment_id, user_defined=False, label=None):
+        self.text = text                    # Comment text
+        self.time = time_sec                # Absolute time in seconds (universal)
         self.comment_id = comment_id        # Unique ID (local to file)
-        self.tick_dt = tick_dt              # Tick duration (s)
-        self.time = time_sec                # Absolute time (s)
         self.user_defined = user_defined    # Whether this comment was added manually by the user
         self.label = label or text          # Display label, defaults to text if not provided
 
@@ -179,23 +177,16 @@ class CommentManager(QObject):
     - Provides query interface for Tabs (no rendering - that's UI responsibility)
     """
     
-    # Qt Signals for global Tab synchronization
-    comment_added = Signal(str, object)    # (file_path, comment)
-    comment_updated = Signal(str, object)  # (file_path, comment) 
-    comment_removed = Signal(str, str)     # (file_path, comment_id)
-    comments_loaded = Signal(str, list)    # (file_path, all_comments)
-    file_comments_changed = Signal(str)    # (file_path) - when any change occurs
+    # Event-driven signals - CommentManager requests, DataManager handles
+    comment_create_requested = Signal(str, dict)  # (file_path, comment_data)
+    comment_update_requested = Signal(str, str, dict)  # (file_path, comment_id, update_data)
+    comment_delete_requested = Signal(str, str)  # (file_path, comment_id)
     
     def __init__(self):
         super().__init__()
         from aurora.core import get_user_logger
         self.logger = get_user_logger("CommentManager")
         self._next_comment_id = 10000  # Start user IDs high to avoid conflicts
-        self._data_manager = None  # Reference to DataManager for cache modification
-        
-        # OPTIMIZED STORAGE: Per-file indexed storage
-        self._file_indices: Dict[str, CommentTimeIndex] = {}  # file_path -> CommentTimeIndex
-        self._current_file: Optional[str] = None  # Currently active file
     
     def set_data_manager(self, data_manager):
         """Set reference to DataManager for direct cache modification."""
@@ -297,12 +288,8 @@ class CommentManager(QObject):
         """
         comment = EMSComment(
             text=text,
-            #FIXME: deberia ser time_Sec*fs
-            tick_position=int(time_sec * 1000),  # Approximate tick
-            comment_id=self._next_comment_id,
-            #FIXME: Lo mismo
-            tick_dt=0.001,  # 1ms approximation
             time_sec=time_sec,
+            comment_id=self._next_comment_id,
             user_defined=True,
             label=label
         )

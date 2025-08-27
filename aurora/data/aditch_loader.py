@@ -1,9 +1,3 @@
-"""
-AditchLoader - Adapted for Aurora session system.
-Loads .adicht files using adi.read_file.
-Copied from Pyside and adapted for new aurora structure.
-"""
-
 import numpy as np
 import adi
 import datetime as dt
@@ -60,10 +54,8 @@ class AditchLoader(BaseLoader):
                         
                         comment = EMSComment(
                             text=c.text,
-                            tick_position=tick_pos,
-                            comment_id=comment_id,
-                            tick_dt=tick_dt,
                             time_sec=time_sec,
+                            comment_id=comment_id,
                             user_defined=False
                         )
                         
