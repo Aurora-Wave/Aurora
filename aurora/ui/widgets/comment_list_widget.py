@@ -209,8 +209,21 @@ class CommentListWidget(QWidget):
         """
         self.logger.info(f"Setting data context - file_path: {file_path}")
         self.logger.info(f"DataManager type: {type(data_manager)}")
+        
+        # Disconnect previous data manager signals if any
+        if self.data_manager:
+            try:
+                self.data_manager.comments_changed.disconnect(self.on_comments_changed)
+            except:
+                pass
+        
         self.data_manager = data_manager
         self.file_path = file_path
+        
+        # Connect to data manager signals for automatic updates
+        if self.data_manager:
+            self.data_manager.comments_changed.connect(self.on_comments_changed)
+        
         self.refresh_comments()
         
     def refresh_comments(self):
@@ -220,8 +233,15 @@ class CommentListWidget(QWidget):
             return
         
         try:
-            # CRITICAL: Temporarily disconnect itemChanged to prevent infinite loops
-            self.table.itemChanged.disconnect()
+            # CRITICAL: Safely disconnect itemChanged to prevent infinite loops
+            # Use try/except to handle both connection and disconnection errors
+            try:
+                # First check if the signal is connected at all
+                if self.table.itemChanged.disconnect():
+                    self.logger.debug("Disconnected itemChanged signal")
+            except (TypeError, RuntimeError):
+                # Signal wasn't connected or already disconnected, which is fine
+                pass
             
             self.logger.debug(f"Getting comments for file: {self.file_path}")
             self.comments = self.data_manager.get_comments(self.file_path)
@@ -262,8 +282,13 @@ class CommentListWidget(QWidget):
         
     def populate_table(self, comments: List[EMSComment]):
         """Populate table with comments."""
-        # CRITICAL: Temporarily disconnect itemChanged to prevent infinite loops
-        self.table.itemChanged.disconnect()
+        # CRITICAL: Safely disconnect itemChanged to prevent infinite loops
+        try:
+            self.table.itemChanged.disconnect()
+            self.logger.debug("Disconnected itemChanged signal")
+        except (TypeError, RuntimeError):
+            # Signal wasn't connected or already disconnected, which is fine
+            self.logger.debug("itemChanged signal was not connected")
         
         self.table.setRowCount(len(comments))
         
@@ -362,12 +387,18 @@ class CommentListWidget(QWidget):
                 new_label = item.text().strip() or None
             
             # Update comment through CommentManager
-            comment_manager.update_user_comment(
-                file_path=self.file_path,
-                comment=comment,
-                text=new_text,
-                time=new_time,
-                label=new_label
+            updates = {}
+            if new_text is not None:
+                updates['text'] = new_text
+            if new_time is not None:
+                updates['time_sec'] = new_time
+            if new_label is not None:
+                updates['label'] = new_label
+                
+            comment_manager.request_update_comment(
+                self.file_path, 
+                comment.comment_id, 
+                **updates
             )
             
             self.logger.info(f"Updated comment via table editing")
@@ -375,7 +406,7 @@ class CommentListWidget(QWidget):
         except Exception as e:
             self.logger.error(f"Error updating comment via table: {e}")
             QMessageBox.critical(self, "Error", f"Failed to update comment: {e}")
-            # Refresh to revert changes
+            # Refresh to revert changes if update failed
             self.refresh_comments()
     
     def get_selected_comment(self) -> Optional[EMSComment]:
@@ -402,16 +433,13 @@ class CommentListWidget(QWidget):
                 from aurora.core.comments import get_comment_manager
                 comment_manager = get_comment_manager()
                 
-                # Add user comment (creates and adds in one call)
-                new_comment = comment_manager.add_user_comment(
+                # Add user comment through request system
+                comment_manager.request_add_comment(
                     file_path=self.file_path,
                     text=data['text'],
                     time_sec=data['time_sec'],
                     label=data['label']
                 )
-                
-                # Refresh UI display
-                self.refresh_comments()
                 
                 # Navigate to new comment
                 self.comment_time_navigate.emit(data['time_sec'])
@@ -441,16 +469,13 @@ class CommentListWidget(QWidget):
                 from aurora.core.comments import get_comment_manager
                 comment_manager = get_comment_manager()
                 
-                comment_manager.update_user_comment(
+                comment_manager.request_update_comment(
                     file_path=self.file_path,
-                    comment=comment,
+                    comment_id=comment.comment_id,
                     text=data['text'],
-                    time=data['time_sec'],
+                    time_sec=data['time_sec'],
                     label=data['label']
                 )
-                
-                # Refresh UI display
-                self.refresh_comments()
                 
                 self.logger.info(f"Updated comment at {data['time_sec']:.2f}s")
                 
@@ -483,11 +508,11 @@ class CommentListWidget(QWidget):
                 from aurora.core.comments import get_comment_manager
                 comment_manager = get_comment_manager()
                 
-                comment_manager.remove_user_comment(self.file_path, comment)
+                # Debug: Log the comment_id we're trying to delete
+                self.logger.debug(f"Attempting to delete comment - ID: '{comment.comment_id}' (type: {type(comment.comment_id)}) at time {comment.time:.2f}s")
                 
-                # Refresh UI display
-                self.refresh_comments()
-                self.logger.info(f"Deleted comment at {comment.time:.2f}s")
+                comment_manager.request_delete_comment(self.file_path, comment.comment_id)
+                self.logger.info(f"Delete request sent for comment {comment.comment_id} at {comment.time:.2f}s")
                 
             except Exception as e:
                 self.logger.error(f"Error deleting comment: {e}")
@@ -506,3 +531,9 @@ class CommentListWidget(QWidget):
     def clear_selection(self):
         """Clear table selection."""
         self.table.clearSelection()
+    
+    def on_comments_changed(self, file_path: str):
+        """Handle comments changed signal from DataManager."""
+        if file_path == self.file_path:
+            self.logger.debug(f"Comments changed for {file_path}, refreshing display")
+            self.refresh_comments()

@@ -49,7 +49,7 @@ class PlotContainerWidget(QWidget):
         self.file_path = None
         self.available_signals: List[str] = []
 
-        # Managers
+        # Custom PLot Style Managers
         self.style_manager = get_plot_style_manager()
 
         # UI Components
@@ -58,9 +58,9 @@ class PlotContainerWidget(QWidget):
         self.scroll_area = None
 
         # Comment rendering - simple visual markers only
-        self.comment_markers: List[pg.InfiniteLine] = (
+        self.comment_markers: List[tuple] = (
             []
-        )  # Simple list of active markers
+        )  # List of tuples (marker, plot_widget) for proper cleanup
 
         # Region selection management
         self._regions: List[Optional[pg.LinearRegionItem]] = []
@@ -374,9 +374,6 @@ class PlotContainerWidget(QWidget):
                     # Update plot
                     plot.update_data(time_data, chunk_data)
 
-                    self.logger.debug(
-                        f"Updated {signal_name}: {len(chunk_data)} samples, {signal.fs}Hz"
-                    )
 
                 except Exception as e:
                     self.logger.error(
@@ -458,24 +455,22 @@ class PlotContainerWidget(QWidget):
                         labelOpts=label_opts,
                     )
 
-                    # Add marker to this plot and store reference
+                    # Add marker to this plot and store reference with plot_widget
                     plot.plot_widget.addItem(marker)
-                    self.comment_markers.append(marker)
+                    self.comment_markers.append((marker, plot.plot_widget))
 
         except Exception as e:
             self.logger.error(f"Error creating markers for comment: {e}")
 
     def _clear_comment_markers(self):
         """Clear all comment markers from all plots."""
-        for marker in self.comment_markers:
+        for marker, plot_widget in self.comment_markers:
             try:
-                # Remove marker from its parent (the plot that contains it)
-                if hasattr(marker, "parentItem") and marker.parentItem():
-                    marker.parentItem().removeItem(marker)
-                elif hasattr(marker, "scene") and marker.scene():
-                    marker.scene().removeItem(marker)
-            except:
-                pass  # Marker might already be removed
+                # Remove marker directly from the plot_widget that owns it
+                plot_widget.removeItem(marker)
+            except Exception as e:
+                # Marker might already be removed or plot_widget invalid
+                pass
 
         self.comment_markers.clear()
 
@@ -807,7 +802,7 @@ class PlotContainerWidget(QWidget):
             self.chunk_size = end_sec - start_sec
 
             # Update each visible channel plot
-            for i, channel_name in enumerate(self.visible_channels):
+            for i, channel_name in enumerate(self.target_signals):
                 if i >= len(self.plots):
                     continue
 
