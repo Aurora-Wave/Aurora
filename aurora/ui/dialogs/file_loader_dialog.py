@@ -19,7 +19,7 @@ from PySide6.QtGui import QFont
 class FileLoaderDialog(QDialog):
     """
     Form dialog for loading:
-    1. Signal file (.adicht) - REQUIRED
+    1. Signal file (.adicht/.edf) - REQUIRED
     2. Configuration file (.json) - OPTIONAL (fallback to channel selection dialog)
     """
     
@@ -63,7 +63,7 @@ class FileLoaderDialog(QDialog):
         # Signal file row
         signal_layout = QHBoxLayout()
         self.signal_path_edit = QLineEdit()
-        self.signal_path_edit.setPlaceholderText("Select a signal file (.adicht)")
+        self.signal_path_edit.setPlaceholderText("Select a signal file (.adicht or .edf)")
         self.signal_path_edit.setReadOnly(True)
         
         self.signal_browse_btn = QPushButton("Browse...")
@@ -116,7 +116,7 @@ class FileLoaderDialog(QDialog):
             self,
             "Select Signal File",
             "",
-            "LabChart Files (*.adicht);;All Files (*)"
+            "Signal Files (*.adicht *.edf);;LabChart Files (*.adicht);;EDF+ Files (*.edf);;All Files (*)"
         )
         
         if file_path:

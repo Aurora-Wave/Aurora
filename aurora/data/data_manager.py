@@ -25,12 +25,10 @@ from aurora.core import get_user_logger, get_current_session
 from aurora.core.config_manager import get_config_manager
 from aurora.core.comments import get_comment_manager, EMSComment
 from aurora.data.aditch_loader import AditchLoader
+from aurora.data.edf_loader import EDFLoader
 
 if TYPE_CHECKING:
     from aurora.core.signal import Signal
-
-
-# from .edf_loader import EDFLoader
 
 
 class DataManager(QObject):
@@ -73,7 +71,8 @@ class DataManager(QObject):
         self._files: Dict[str, Dict[str, Any]] = {}
         self._loader_registry: Dict[str, type] = {
             ".adicht": AditchLoader,
-            # ".edf": EDFLoader,
+            ".edf": EDFLoader,
+            ".edf+": EDFLoader,  # EDF+ files often use .edf extension
         }
         self.logger = get_user_logger(self.__class__.__name__)
         self.session = get_current_session()
