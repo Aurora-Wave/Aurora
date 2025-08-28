@@ -31,7 +31,6 @@ class MainWindow(QMainWindow):
         self.logger.debug("=== MAINWINDOW INIT STARTED ===")
 
         self.setWindowTitle("Aurora 2.0 - Multi-Session Signal Analysis")
-        # self.setMinimumSize(1400, 900)
         self.showMaximized()
         self.logger.debug("Window title and size configured")
 

@@ -10,4 +10,4 @@ from .peak_detection_strategies import (
     SimpleThresholdStrategy,
     strategy_registry,
 )
-from .chunk_loader import ChunkLoader, ChunkCache
+from .chunk_loader import ChunkLoader

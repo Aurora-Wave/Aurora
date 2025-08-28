@@ -123,15 +123,12 @@ class EDFLoader(BaseLoader):
             raise ValueError(f"Channel '{channel}' not found in EDF+ file. "
                            f"Available channels: {self.metadata['channels']}")
         
-        # Load data for specific channel
+        # Load data for specific channel ONLY
         channel_idx = self.metadata["channels"].index(channel)
         
-        # Load all data if not already loaded
-        if not self.raw_data.preload:
-            self.raw_data.load_data()
-        
-        # Extract channel data
-        data = self.raw_data.get_data(picks=[channel_idx])[0]  # Shape: (1, n_samples) -> (n_samples,)
+        # Get data for specific channel without loading entire file
+        # This is much more memory and performance efficient
+        data = self.raw_data.get_data(picks=[channel_idx], start=0, stop=None)[0]  # Shape: (1, n_samples) -> (n_samples,)
         fs = self.metadata["fs"][channel]
         
         # Create time array

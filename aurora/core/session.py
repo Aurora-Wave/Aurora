@@ -79,11 +79,8 @@ class Session(QObject):
 
         self.logger.debug(f"=== SESSION INIT COMPLETED ===")
 
-    def load_file(
-        self,
-        selected_channels: List[str] = None,
-        config_file_path: Optional[str] = None,
-    ) -> bool:
+    def load_file(self,selected_channels: List[str] = None,config_file_path: Optional[str] = None) -> bool:
+        
         self.logger.info(f"=== SESSION LOAD_FILE STARTED ===")
         self.logger.info(f"Session: {self.session_id}")
         self.logger.info(f"File: {self.file_path}")
@@ -225,13 +222,17 @@ class Session(QObject):
             self.logger.debug(f"Final selected channels: {self.selected_channels}")
 
             # Initialize ChunkLoader now that file is loaded
+            self.logger.info(f"=== ATTEMPTING TO CREATE CHUNKLOADER ===")
             try:
                 from aurora.processing.chunk_loader import ChunkLoader
+                self.logger.info(f"ChunkLoader import successful")
 
                 self.chunk_loader = ChunkLoader(self)
-                self.logger.debug(f"ChunkLoader created successfully")
+                self.logger.info(f"ChunkLoader created successfully: {self.chunk_loader}")
             except Exception as e:
-                self.logger.warning(f"Failed to create ChunkLoader: {e}")
+                self.logger.error(f"Failed to create ChunkLoader: {e}")
+                import traceback
+                self.logger.error(f"ChunkLoader creation traceback:\n{traceback.format_exc()}")
                 # Don't fail the entire session load if ChunkLoader fails
                 self.chunk_loader = None
 

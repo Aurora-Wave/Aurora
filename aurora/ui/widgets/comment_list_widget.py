@@ -405,7 +405,7 @@ class CommentListWidget(QWidget):
             if new_label is not None:
                 updates['label'] = new_label
                 
-            comment_manager.request_update_comment(
+            comment_manager.update_comment(
                 self.file_path, 
                 comment.comment_id, 
                 **updates
@@ -463,7 +463,7 @@ class CommentListWidget(QWidget):
                 comment_manager = get_comment_manager()
                 
                 # Add user comment through request system
-                comment_manager.request_add_comment(
+                comment_manager.add_comment(
                     file_path=self.file_path,
                     text=data['text'],
                     time_sec=data['time_sec'],
@@ -498,7 +498,7 @@ class CommentListWidget(QWidget):
                 from aurora.core.comments import get_comment_manager
                 comment_manager = get_comment_manager()
                 
-                comment_manager.request_update_comment(
+                comment_manager.update_comment(
                     file_path=self.file_path,
                     comment_id=comment.comment_id,
                     text=data['text'],
@@ -555,7 +555,7 @@ class CommentListWidget(QWidget):
                         # Debug: Log the comment_id we're trying to delete
                         self.logger.debug(f"Attempting to delete comment - ID: '{comment.comment_id}' (type: {type(comment.comment_id)}) at time {comment.time:.2f}s")
                         
-                        comment_manager.request_delete_comment(self.file_path, comment.comment_id)
+                        comment_manager.delete_comment(self.file_path, comment.comment_id)
                         deleted_count += 1
                         self.logger.info(f"Delete request sent for comment {comment.comment_id} at {comment.time:.2f}s")
                         

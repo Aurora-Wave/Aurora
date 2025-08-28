@@ -20,65 +20,10 @@ Architecture:
 
 import numpy as np
 import logging
-from typing import Dict, List, Optional, Any, Tuple
-from collections import OrderedDict
-from PySide6.QtCore import QObject, Signal as QtSignal, QTimer
+from typing import Dict, List, Optional, Tuple
+from PySide6.QtCore import QObject, Signal as QtSignal
 from aurora.core.session import Session
 
-
-class ChunkCache:
-    """
-    LRU cache for chunk data with session-based memory limits.
-    """
-
-    def __init__(self, max_size: int = 50):
-        """
-        Initialize chunk cache.
-
-        Args:
-            max_size: Maximum number of cached chunks
-        """
-        self.max_size = max_size
-        self.cache: OrderedDict = OrderedDict()
-        self.logger = logging.getLogger("aurora.processing.ChunkCache")
-
-    def get(self, key: str) -> Optional[Dict[str, np.ndarray]]:
-        """Get cached chunk data, updating LRU order."""
-        if key in self.cache:
-            # Move to end (most recently used)
-            chunk_data = self.cache.pop(key)
-            self.cache[key] = chunk_data
-            return chunk_data
-        return None
-
-    def put(self, key: str, data: Dict[str, np.ndarray]) -> None:
-        """Store chunk data with LRU eviction."""
-        if key in self.cache:
-            # Update existing entry
-            self.cache.pop(key)
-        elif len(self.cache) >= self.max_size:
-            # Evict oldest entry
-            oldest_key = next(iter(self.cache))
-            evicted_data = self.cache.pop(oldest_key)
-            self.logger.debug(f"Evicted chunk cache entry: {oldest_key}")
-
-        self.cache[key] = data
-        self.logger.debug(f"Cached chunk: {key}")
-
-    def clear(self) -> None:
-        """Clear all cached data."""
-        self.cache.clear()
-        self.logger.debug("Chunk cache cleared")
-
-    def get_cache_info(self) -> Dict[str, Any]:
-        """Get cache statistics."""
-        return {
-            "size": len(self.cache),
-            "max_size": self.max_size,
-            "utilization": (
-                len(self.cache) / self.max_size if self.max_size > 0 else 0.0
-            ),
-        }
 
 
 class ChunkLoader(QObject):
@@ -101,12 +46,9 @@ class ChunkLoader(QObject):
         cache_stats_updated: Emitted when cache statistics change (stats_dict)
     """
 
-    # Qt Signals for asynchronous communication
-    chunk_loaded = QtSignal(
-        float, float, dict
-    )  # start_sec, end_sec, {channel: chunk_data}
+    # Qt Signals for asynchronous communication (simplified like working tree)
+    chunk_loaded = QtSignal(float, float, dict)  # start_sec, end_sec, {channel: chunk_data}
     chunk_error = QtSignal(str)  # error_message
-    cache_stats_updated = QtSignal(dict)  # cache statistics
 
     def __init__(self, session: Session, parent=None):
         """
@@ -122,94 +64,48 @@ class ChunkLoader(QObject):
         self.logger = logging.getLogger(
             f"aurora.processing.ChunkLoader.{session.session_id}"
         )
+        self.logger.info(f"ChunkLoader.__init__ starting with session: {session.session_id}")
+        self.logger.debug(f"ChunkLoader parent QObject initialization completed")
 
-        # Get cache configuration from session
-        cache_size = session.get_config("chunk_cache_size", 50)
-        self.cache = ChunkCache(cache_size)
-
-        # Request throttling to prevent UI blocking
-        self.request_timer = QTimer()
-        self.request_timer.setSingleShot(True)
-        self.request_timer.timeout.connect(self._process_pending_request)
-        self.pending_request: Optional[Tuple] = None
-
+        # Simple cache like working tree
+        self._cache: Dict[str, Tuple[float, float, Dict[str, np.ndarray]]] = {}
+        self._cache_order = []  # For LRU tracking
+        self._max_cache_size = 50
+        
         # Configuration - optimized for responsive navigation
-        self.throttle_delay_ms = 5  # Minimal delay for responsive UI (was 50ms)
-        # Unified limit for all signals - optimized for performance and visual quality
-        self.max_points_per_plot = 20000  # Points before downsampling - all signals equal
+        self.max_points_per_plot = 20000  # Points before downsampling
+        
+        self.logger.info(f"ChunkLoader initialization completed successfully for session {session.session_id}")
+        self.logger.debug(f"ChunkLoader config: cache_size={self._max_cache_size}, max_points={self.max_points_per_plot}")
 
-        self.logger.debug(f"ChunkLoader initialized for session {session.session_id}")
+    def _generate_cache_key(
+        self, file_path: str, channel_names: list, start_sec: float, duration_sec: float
+    ) -> str:
+        """Generate a unique cache key for the chunk request (like working tree)."""
+        import hashlib
+        key_data = f"{file_path}|{sorted(channel_names)}|{start_sec:.2f}|{duration_sec:.2f}"
+        return hashlib.md5(key_data.encode()).hexdigest()
 
-    @staticmethod
-    def get_chunk(
-        session: Session,
-        channel_names: List[str],
-        start_sec: float,
-        duration_sec: float,
-        **hr_params,
-    ) -> Dict[str, np.ndarray]:
-        """
-        Synchronously extract chunk data (blocking call).
+    def _get_from_cache(self, cache_key: str) -> Optional[Tuple[float, float, Dict[str, np.ndarray]]]:
+        """Retrieve chunk from cache if available."""
+        if cache_key in self._cache:
+            # Move to end (most recently used)
+            self._cache_order.remove(cache_key)
+            self._cache_order.append(cache_key)
+            return self._cache[cache_key]
+        return None
 
-        This static method provides immediate access to chunk data for cases
-        where synchronous access is needed (e.g., analysis operations).
-
-        Args:
-            session: Session containing data_manager and file_path
-            channel_names: Names of channels to extract
-            start_sec: Start time in seconds
-            duration_sec: Duration in seconds
-            **hr_params: Parameters for HR_gen signal generation
-
-        Returns:
-            Dictionary mapping channel names to numpy arrays
-
-        Raises:
-            ValueError: If session or channels are invalid
-            Exception: If data extraction fails
-        """
-        if not session or not session.data_manager:
-            raise ValueError("Invalid session or data_manager")
-
-        if not session.file_path:
-            raise ValueError("No file loaded in session")
-
-        results = {}
-        data_manager = session.data_manager
-        file_path = session.file_path
-
-        for ch in channel_names:
-            try:
-                # Get signal from data manager
-                if ch.upper() == "HR_GEN":
-                    sig = data_manager.get_trace(file_path, ch, **hr_params)
-                else:
-                    sig = data_manager.get_trace(file_path, ch)
-
-                if sig is None:
-                    continue
-
-                # Extract chunk from signal
-                fs = sig.fs
-                data = sig.data
-
-                # Calculate indices with bounds checking
-                start_idx = int(max(0, min(start_sec * fs, len(data) - 1)))
-                end_idx = int(
-                    max(start_idx + 1, min((start_sec + duration_sec) * fs, len(data)))
-                )
-
-                # Extract chunk
-                chunk = data[start_idx:end_idx]
-                results[ch] = chunk
-
-            except Exception as e:
-                # Log error but continue with other channels
-                logger = logging.getLogger("aurora.processing.ChunkLoader")
-                logger.warning(f"Failed to extract chunk for channel {ch}: {e}")
-                continue
-
-        return results
+    def _store_in_cache(self, cache_key: str, start: float, end: float, data: Dict[str, np.ndarray]):
+        """Store chunk data in cache with LRU eviction."""
+        if cache_key in self._cache:
+            self._cache_order.remove(cache_key)
+        elif len(self._cache) >= self._max_cache_size:
+            # Evict oldest entry
+            oldest_key = self._cache_order.pop(0)
+            del self._cache[oldest_key]
+        
+        self._cache[cache_key] = (start, end, data)
+        self._cache_order.append(cache_key)
 
     def request_chunk(
         self,
@@ -219,237 +115,178 @@ class ChunkLoader(QObject):
         **hr_params,
     ) -> None:
         """
-        Asynchronously request chunk data with throttling.
-
-        This method queues a chunk request and processes it after a short delay
-        to prevent overwhelming the system with rapid requests (e.g., during
-        fast scrolling or resizing).
-
-        Args:
-            channel_names: Names of channels to extract
-            start_sec: Start time in seconds
-            duration_sec: Duration in seconds
-            **hr_params: Parameters for HR_gen signal generation
+        Simplified chunk request like working tree.
         """
-        # Store pending request (overwrites any existing pending request)
-        self.pending_request = (channel_names, start_sec, duration_sec, hr_params)
-
-        # Start or restart throttling timer
-        self.request_timer.start(self.throttle_delay_ms)
-
-        self.logger.debug(
-            f"Chunk request queued: channels={channel_names}, start={start_sec:.2f}s"
-        )
-
-    def _process_pending_request(self) -> None:
-        """Process the pending chunk request."""
-        if not self.pending_request:
-            return
-
-        channel_names, start_sec, duration_sec, hr_params = self.pending_request
-        self.pending_request = None
-
         try:
-            # Generate cache key
-            cache_key = self._generate_cache_key(
-                channel_names, start_sec, duration_sec, hr_params
-            )
-
             # Check cache first
-            cached_data = self.cache.get(cache_key)
-            if cached_data is not None:
-                self.logger.debug(f"Using cached chunk: {cache_key}")
-                self.chunk_loaded.emit(start_sec, start_sec + duration_sec, cached_data)
+            file_path = self.session.file_path
+            cache_key = self._generate_cache_key(file_path, channel_names, start_sec, duration_sec)
+            cached_result = self._get_from_cache(cache_key)
+
+            if cached_result is not None:
+                start_cached, end_cached, data_cached = cached_result
+                self.chunk_loaded.emit(start_cached, end_cached, data_cached)
                 return
 
-            # Extract chunk data
-            chunk_data = self._extract_chunk_data(
-                channel_names, start_sec, duration_sec, hr_params
-            )
+            # Process chunk if not in cache - SIMPLE like working tree
+            result = {}
+            data_manager = self.session.data_manager
+            
+            for ch in channel_names:
+                try:
+                    # Get signal from data manager (like working tree)
+                    if ch.upper() == "HR_GEN":
+                        sig = data_manager.get_trace(file_path, ch, **hr_params)
+                    else:
+                        sig = data_manager.get_trace(file_path, ch)
 
-            # Cache the result
-            self.cache.put(cache_key, chunk_data)
+                    if sig is None:
+                        continue
 
-            # Emit cache statistics
-            self.cache_stats_updated.emit(self.cache.get_cache_info())
+                    # Extract chunk using simple indices (like working tree)
+                    fs = sig.fs
+                    start_idx = int(start_sec * fs)
+                    end_idx = int((start_sec + duration_sec) * fs)
+                    chunk = sig.data[start_idx:end_idx]
 
-            # Emit chunk data
-            self.chunk_loaded.emit(start_sec, start_sec + duration_sec, chunk_data)
+                    # Apply downsampling if needed
+                    if len(chunk) > self.max_points_per_plot:
+                        chunk = self._apply_downsampling(chunk, fs, start_sec, ch)
 
-            self.logger.debug(
-                f"Chunk processed: {len(chunk_data)} channels, {start_sec:.2f}-{start_sec + duration_sec:.2f}s"
-            )
+                    result[ch] = chunk
 
-        except Exception as e:
-            error_msg = f"Failed to process chunk request: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            self.chunk_error.emit(error_msg)
-
-    def _extract_chunk_data(
-        self,
-        channel_names: List[str],
-        start_sec: float,
-        duration_sec: float,
-        hr_params: Dict,
-    ) -> Dict[str, np.ndarray]:
-        """Extract and process chunk data from session data manager."""
-        results = {}
-        data_manager = self.session.data_manager
-        file_path = self.session.file_path
-
-        for ch in channel_names:
-            try:
-                # Get signal from data manager
-                if ch.upper() == "HR_GEN":
-                    sig = data_manager.get_trace(file_path, ch, **hr_params)
-                else:
-                    sig = data_manager.get_trace(file_path, ch)
-
-                if sig is None:
-                    self.logger.warning(f"No signal found for channel: {ch}")
+                except Exception as e:
+                    self.logger.error(f"Error processing channel {ch}: {e}")
                     continue
 
-                # Extract chunk from signal
-                fs = sig.fs
-                data = sig.data
+            # Store in cache and emit
+            self._store_in_cache(cache_key, start_sec, start_sec + duration_sec, result)
+            self.chunk_loaded.emit(start_sec, start_sec + duration_sec, result)
 
-                # Calculate indices with bounds checking
-                start_idx = int(max(0, min(start_sec * fs, len(data) - 1)))
-                end_idx = int(
-                    max(start_idx + 1, min((start_sec + duration_sec) * fs, len(data)))
-                )
+        except Exception as e:
+            self.logger.error(f"Chunk request failed: {e}")
+            self.chunk_error.emit(str(e))
 
-                # Extract chunk
-                chunk = data[start_idx:end_idx]
-
-                # Apply downsampling if chunk is too large
-                chunk_downsampled = self._apply_downsampling(chunk, fs, start_sec, ch)
-
-                results[ch] = chunk_downsampled
-
-            except Exception as e:
-                self.logger.error(f"Error extracting chunk for channel {ch}: {e}")
-                # Continue with other channels instead of failing completely
-                continue
-
-        return results
 
     def _apply_downsampling(
         self, chunk: np.ndarray, fs: float, start_sec: float, channel_name: str = ""
     ) -> np.ndarray:
         """
-        Apply uniform downsampling to chunk data for visualization performance.
+        Apply intelligent downsampling to chunk data for visualization performance.
         
-        TODO: FIXME - DOWNSAMPLING ALGORITHM IS BROKEN
-        Current algorithm causes high-resolution signals (ECG) to display "at half size"
-        while lower resolution signals display correctly.
-        
-        TEMPORARY SOLUTION: Return original chunk without downsampling
-        This ensures all signals display correctly but may impact performance
-        with very large datasets.
-        
-        ISSUES TO FIX:
-        1. Algorithm treats all signals equally but results are inconsistent
-        2. High-res signals (ECG 1000Hz) appear truncated/compressed
-        3. Low-res signals (others) appear normal
-        4. Possible issue with time axis alignment or plot range setting
+        Uses adaptive decimation strategy:
+        - Small datasets: no downsampling
+        - Medium datasets: simple decimation  
+        - Large datasets: block averaging to preserve signal characteristics
         
         Args:
             chunk: Original chunk data
             fs: Sampling frequency
             start_sec: Start time for time axis generation
-            channel_name: Name of the channel (for logging only)
+            channel_name: Name of the channel (for logging)
 
         Returns:
-            Original chunk data (no downsampling applied)
+            Downsampled chunk data optimized for visualization
         """
-        # TEMPORARY: Return original data without downsampling
+        if len(chunk) <= self.max_points_per_plot:
+            # No downsampling needed
+            return chunk
+        
+        # Calculate downsampling factor
+        step = max(1, int(np.ceil(len(chunk) / self.max_points_per_plot)))
+        
         self.logger.debug(
-            f"TEMP BYPASS: {channel_name} returning {len(chunk)} points "
-            f"(fs={fs:.1f}Hz) - no downsampling applied"
+            f"Downsampling {channel_name}: {len(chunk)} → ~{len(chunk)//step} points (step={step})"
         )
         
-        return chunk
-        
-        # BROKEN CODE DISABLED:
-        # if len(chunk) <= self.max_points_per_plot:
-        #     return chunk
-        # 
-        # # Calculate downsampling factor
-        # step = max(1, int(np.ceil(len(chunk) / self.max_points_per_plot)))
-        # 
-        # # Apply intelligent decimation
-        # if step <= 2:
-        #     # Simple decimation for small factors
-        #     downsampled = chunk[::step]
-        # else:
-        #     # For larger factors, use average-based decimation
-        #     trim_length = len(chunk) - (len(chunk) % step)
-        #     trimmed_chunk = chunk[:trim_length]
-        #     reshaped = trimmed_chunk.reshape(-1, step)
-        #     downsampled = np.mean(reshaped, axis=1)
-        #     
-        #     # Add any remaining samples
-        #     if trim_length < len(chunk):
-        #         remaining_mean = np.mean(chunk[trim_length:])
-        #         downsampled = np.append(downsampled, remaining_mean)
-        # 
-        # return downsampled
-
-    def _generate_cache_key(
-        self,
-        channel_names: List[str],
-        start_sec: float,
-        duration_sec: float,
-        hr_params: Dict,
-    ) -> str:
-        """Generate unique cache key for chunk request."""
-        channels_str = "|".join(sorted(channel_names))
-
-        # Round times to avoid cache misses due to floating point precision
-        start_rounded = round(start_sec, 2)
-        duration_rounded = round(duration_sec, 2)
-
-        # Include HR parameters in key if present
-        if hr_params:
-            hr_str = "|".join(f"{k}={v}" for k, v in sorted(hr_params.items()))
-            return f"{channels_str}_{start_rounded}_{duration_rounded}_{hr_str}"
+        # Apply intelligent decimation based on step size
+        if step <= 2:
+            # Simple decimation for small factors - preserves peaks
+            downsampled = chunk[::step]
         else:
-            return f"{channels_str}_{start_rounded}_{duration_rounded}"
+            # For larger factors, use min-max decimation to preserve signal envelope
+            # This prevents losing important peaks and valleys
+            n_blocks = len(chunk) // step
+            remainder = len(chunk) % step
+            
+            if n_blocks > 0:
+                # Reshape data into blocks for min-max extraction
+                reshaped = chunk[:n_blocks * step].reshape(n_blocks, step)
+                
+                # Extract min and max from each block
+                mins = np.min(reshaped, axis=1)
+                maxs = np.max(reshaped, axis=1)
+                
+                # Interleave mins and maxs to preserve envelope
+                downsampled = np.empty(n_blocks * 2)
+                downsampled[0::2] = mins
+                downsampled[1::2] = maxs
+                
+                # Add remaining samples if any
+                if remainder > 0:
+                    remaining_chunk = chunk[n_blocks * step:]
+                    remaining_min = np.min(remaining_chunk)
+                    remaining_max = np.max(remaining_chunk)
+                    downsampled = np.append(downsampled, [remaining_min, remaining_max])
+            else:
+                # Fallback for very small chunks
+                downsampled = np.array([np.min(chunk), np.max(chunk)])
+        
+        self.logger.debug(
+            f"Downsampled {channel_name}: {len(chunk)} → {len(downsampled)} points"
+        )
+        
+        return downsampled
+
+    def _create_downsampled_time_axis(
+        self, original_chunk: np.ndarray, downsampled_chunk: np.ndarray, fs: float, start_sec: float
+    ) -> np.ndarray:
+        """
+        Create appropriate time axis for downsampled data.
+        
+        Args:
+            original_chunk: Original data before downsampling
+            downsampled_chunk: Data after downsampling
+            fs: Original sampling frequency
+            start_sec: Start time
+            
+        Returns:
+            Time axis matching downsampled data length
+        """
+        original_len = len(original_chunk)
+        downsampled_len = len(downsampled_chunk)
+        
+        if downsampled_len == original_len:
+            # No downsampling
+            return np.arange(downsampled_len) / fs + start_sec
+        
+        step = original_len / self.max_points_per_plot
+        
+        if step <= 2:
+            # Simple decimation - linear time mapping
+            step_int = int(np.ceil(step))
+            time_indices = np.arange(0, original_len, step_int)[:downsampled_len]
+            return time_indices / fs + start_sec
+        else:
+            # Min-max decimation - each pair represents a time block
+            n_blocks = downsampled_len // 2
+            block_duration = (original_len / fs) / n_blocks if n_blocks > 0 else 1.0
+            
+            # Create time points for min-max pairs
+            time_axis = np.empty(downsampled_len)
+            for i in range(n_blocks):
+                block_start_time = start_sec + (i * block_duration)
+                time_axis[i*2] = block_start_time  # min time
+                time_axis[i*2 + 1] = block_start_time + block_duration * 0.5  # mid-block time
+            
+            # Handle any remaining points
+            if downsampled_len % 2 != 0:
+                time_axis[-1] = start_sec + (original_len - 1) / fs
+                
+            return time_axis
 
     def clear_cache(self) -> None:
         """Clear all cached chunk data."""
-        self.cache.clear()
-        self.cache_stats_updated.emit(self.cache.get_cache_info())
+        self._cache.clear()
+        self._cache_order.clear()
         self.logger.info("Chunk cache cleared")
-
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get current cache statistics."""
-        return self.cache.get_cache_info()
-
-    def set_max_points(self, max_points: int) -> None:
-        """Set maximum points per plot before downsampling."""
-        self.max_points_per_plot = max(10000, max_points)  # Minimum 10k points for good visual quality
-        self.logger.debug(f"Max points per plot set to: {self.max_points_per_plot}")
-
-    def set_throttle_delay(self, delay_ms: int) -> None:
-        """Set throttling delay for chunk requests."""
-        self.throttle_delay_ms = max(1, delay_ms)  # Minimum 1ms for responsiveness
-        self.logger.debug(f"Throttle delay set to: {self.throttle_delay_ms}ms")
-
-    def cleanup(self) -> None:
-        """Cleanup resources when chunk loader is no longer needed."""
-        try:
-            # Stop any pending requests
-            self.request_timer.stop()
-            self.pending_request = None
-
-            # Clear cache
-            self.clear_cache()
-
-            self.logger.debug(
-                f"ChunkLoader cleanup completed for session {self.session.session_id}"
-            )
-
-        except Exception as e:
-            self.logger.error(f"Error during ChunkLoader cleanup: {e}")

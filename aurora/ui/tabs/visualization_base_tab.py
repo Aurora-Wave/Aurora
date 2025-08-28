@@ -93,11 +93,8 @@ class VisualizationBaseTab(QWidget):
         self.chunk_size = 60.0
         self.duration = 100.0
 
-        # Timer for slider throttling (improves performance)
-        self.slider_timer = QTimer()
-        self.slider_timer.setSingleShot(True)
-        self.slider_timer.timeout.connect(self._apply_slider_change)
-        self.pending_slider_value = None
+        # Direct navigation without throttling for optimal performance
+        # Timer and throttling removed to eliminate delays
 
         # Setup base UI
         self._setup_base_ui()
@@ -130,26 +127,50 @@ class VisualizationBaseTab(QWidget):
         )
 
     def _connect_chunk_loader(self):
-        """Connect ChunkLoader signals if available."""
+        """Connect ChunkLoader signals if available and request initial data."""
         if hasattr(self.session, "chunk_loader") and self.session.chunk_loader:
             try:
                 chunk_loader = self.session.chunk_loader
                 chunk_loader.chunk_loaded.connect(self._on_chunk_loaded)
                 chunk_loader.chunk_error.connect(self._on_chunk_error)
-                chunk_loader.cache_stats_updated.connect(self._on_cache_stats_updated)
                 self.logger.debug("ChunkLoader signals connected")
+                
+                # Request initial chunk load now that signals are connected
+                self._request_initial_chunk_load()
+                
             except Exception as e:
                 self.logger.error(f"Failed to connect ChunkLoader signals: {e}")
         else:
             self.logger.debug("ChunkLoader not available in session")
 
+    def _request_initial_chunk_load(self):
+        """Request initial chunk load from ChunkLoader."""
+        if (hasattr(self.session, 'chunk_loader') and 
+            self.session.chunk_loader and 
+            self.session.selected_channels):
+            try:
+                chunk_loader = self.session.chunk_loader
+                hr_params = getattr(self, 'hr_params', {})
+                
+                chunk_loader.request_chunk(
+                    channel_names=self.session.selected_channels,
+                    start_sec=self.start_time,
+                    duration_sec=self.chunk_size,
+                    **hr_params
+                )
+                self.logger.info(f"Initial chunk requested: {self.start_time:.2f}s duration: {self.chunk_size:.2f}s")
+            except Exception as e:
+                self.logger.error(f"Failed to request initial chunk: {e}")
+        else:
+            self.logger.warning("ChunkLoader or selected channels not available for initial load")
+
     def _on_chunk_loaded(self, start_sec: float, end_sec: float, data_dict: dict):
-        """Handle chunk data loaded from ChunkLoader."""
+        """Handle chunk data loaded from ChunkLoader (simplified like working tree)."""
         self.logger.debug(
             f"Chunk loaded: {start_sec:.2f}-{end_sec:.2f}s, {len(data_dict)} channels"
         )
 
-        # Update plot container with chunk data
+        # Update plot container with chunk data (simplified)
         if self.plot_container:
             try:
                 self.plot_container.update_chunk_data(start_sec, end_sec, data_dict)
@@ -380,12 +401,12 @@ class VisualizationBaseTab(QWidget):
             self.current_parameters = hr_params.copy()
             self.hr_params = hr_params.copy()  # Store for ChunkLoader
 
-            # Connect to DataManager signals if not already connected
-            try:
-                data_manager.comments_changed.connect(self._on_comments_changed)
-            except TypeError:
-                # Already connected, which is fine
-                pass
+            # TEMPORARILY DISABLED: Connect to DataManager signals if not already connected
+            # try:
+            #     data_manager.comments_changed.connect(self._on_comments_changed)
+            # except TypeError:
+            #     # Already connected, which is fine
+            #     pass
 
             # Update tab data (delegates to subclass implementation)
             success = self.update_tab_data(
@@ -469,7 +490,7 @@ class VisualizationBaseTab(QWidget):
         if self.time_label:
             self.time_label.setText(f"{value}.0s")
 
-        # Use ONLY ChunkLoader for navigation - avoid conflict with update_chunk_data
+        # Use ChunkLoader for all navigation - consistent with slider behavior
         if (
             hasattr(self.session, "chunk_loader")
             and self.session.chunk_loader
@@ -489,8 +510,7 @@ class VisualizationBaseTab(QWidget):
         else:
             self.logger.warning("ChunkLoader not available for spinbox navigation")
 
-        # Refresh comment markers for new time window
-        self.refresh_comment_markers()
+        # Comment markers will be refreshed by _on_chunk_loaded automatically
 
         # Emit signal for other components
         self.time_changed.emit(self.start_time)
@@ -500,7 +520,7 @@ class VisualizationBaseTab(QWidget):
         self.chunk_size = float(value)
         self._set_duration(self.duration)  # Update ranges
 
-        # Use ONLY ChunkLoader for navigation - avoid conflict with update_chunk_data
+        # Use ChunkLoader for all navigation - consistent with slider behavior  
         if (
             hasattr(self.session, "chunk_loader")
             and self.session.chunk_loader
@@ -520,8 +540,7 @@ class VisualizationBaseTab(QWidget):
         else:
             self.logger.warning("ChunkLoader not available for chunk size change")
 
-        # Refresh comment markers for new time window
-        self.refresh_comment_markers()
+        # Comment markers will be refreshed by _on_chunk_loaded automatically
 
         # Emit signal for other components
         self.chunk_size_changed.emit(self.chunk_size)
@@ -535,56 +554,32 @@ class VisualizationBaseTab(QWidget):
         if self.time_label:
             self.time_label.setText(f"{value}.0s")
 
-        # Store the value and start/restart timer for throttling
-        self.pending_slider_value = value
-        self.slider_timer.start(5)  # Ultra-responsive - minimal delay
+        # Use ChunkLoader for navigation
+        self._apply_slider_change_to_chunk_loader(value)
 
-    def _apply_slider_change(self):
-        """Apply the pending slider change to plots (optimized for responsiveness)."""
-        if self.pending_slider_value is not None:
-            value = self.pending_slider_value
-            self.pending_slider_value = None
+    def _apply_slider_change_to_chunk_loader(self, value: float):
+        """Apply slider change using ChunkLoader for navigation."""
+        if (
+            hasattr(self.session, "chunk_loader")
+            and self.session.chunk_loader
+            and self.session.selected_channels
+        ):
+            try:
+                chunk_loader = self.session.chunk_loader
+                chunk_loader.request_chunk(
+                    channel_names=self.session.selected_channels,
+                    start_sec=float(value),
+                    duration_sec=self.chunk_size,
+                    **self.hr_params,
+                )
+                self.logger.debug(f"ChunkLoader navigation: {value:.2f}s")
+            except Exception as e:
+                self.logger.error(f"ChunkLoader request failed: {e}")
+        else:
+            self.logger.warning("ChunkLoader not available for navigation")
 
-            # HYBRID APPROACH: Direct navigation for immediate response, ChunkLoader for caching
-            # For slider navigation, prioritize speed over caching
-            
-            # Method 1: Direct navigation (fast, no caching)
-            if self.plot_container:
-                try:
-                    self.plot_container.set_time_window(float(value), self.chunk_size)
-                    self.refresh_comment_markers()
-                    self.logger.debug(f"Direct navigation: {value:.2f}s (immediate)")
-                except Exception as e:
-                    self.logger.error(f"Direct navigation failed: {e}")
-            
-            # Method 2: Optional ChunkLoader for background caching (async)
-            # This runs in parallel for future cache hits but doesn't delay current navigation
-            if (
-                hasattr(self.session, "chunk_loader")
-                and self.session.chunk_loader
-                and self.session.selected_channels
-            ):
-                try:
-                    # Set minimal delay for background caching
-                    chunk_loader = self.session.chunk_loader
-                    original_delay = chunk_loader.throttle_delay_ms
-                    chunk_loader.set_throttle_delay(1)  # Minimal background delay
-                    
-                    chunk_loader.request_chunk(
-                        channel_names=self.session.selected_channels,
-                        start_sec=float(value),
-                        duration_sec=self.chunk_size,
-                        **self.hr_params,
-                    )
-                    
-                    # Restore original delay
-                    chunk_loader.set_throttle_delay(original_delay)
-                    
-                except Exception as e:
-                    self.logger.debug(f"Background ChunkLoader request failed: {e}")
-
-            # Emit signal for other components
-            self.time_changed.emit(float(value))
+        # Emit signal for other components
+        self.time_changed.emit(float(value))
 
     # Fallback method removed - using ChunkLoader exclusively for navigation
 

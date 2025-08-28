@@ -2,7 +2,7 @@
 Data Manager Module for AuroraWave
 
 This module provides centralized data management capabilities for physiological signal files.
-It handles file loading, caching, signal extraction, and metadata management with support
+It handles caching, signal extraction, and metadata management with support
 for multiple file formats and parameterized signal generation.
 
 Classes:
@@ -47,6 +47,10 @@ class DataManager(QObject):
         session: Current user session
         config_manager: Configuration manager instance
 
+    Signals:
+        data_updated: Emitted when data is loaded/updated (file_path, metadata_dict)
+        metadata_changed: Emitted when metadata changes (file_path, metadata_dict)
+
     Example:
         >>> dm = DataManager()
         >>> dm.load_file("/path/to/data.adicht")
@@ -59,6 +63,10 @@ class DataManager(QObject):
     comment_added = QtSignal(str, object)  # (file_path, comment)
     comment_updated = QtSignal(str, object)  # (file_path, comment)
     comment_removed = QtSignal(str, str)  # (file_path, comment_id)
+
+    # Qt Signals for data change notifications
+    data_updated = QtSignal(str, dict)  # file_path, metadata_dict
+    metadata_changed = QtSignal(str, dict)  # file_path, metadata_dict
 
     def __init__(self) -> None:
         """
@@ -82,11 +90,12 @@ class DataManager(QObject):
         self._time_cache = {}  # path -> {'start_time', 'end_time', 'comments', 'cache_version'}
         self._cache_version = 0  # Incremented when comments change
         
-        # Subscribe to CommentManager events
+        # Subscribe to CommentManager change notifications
         comment_manager = get_comment_manager()
-        comment_manager.comment_create_requested.connect(self._handle_comment_create)
-        comment_manager.comment_update_requested.connect(self._handle_comment_update)
-        comment_manager.comment_delete_requested.connect(self._handle_comment_delete)
+        comment_manager.set_data_manager(self)  # Inject dependency
+        comment_manager.comment_created.connect(self._update_comment_cache_create)
+        comment_manager.comment_updated.connect(self._update_comment_cache_update)
+        comment_manager.comment_deleted.connect(self._update_comment_cache_delete)
 
     def load_file(self, path: str) -> None:
         """
@@ -119,7 +128,6 @@ class DataManager(QObject):
 
         # Load comments directly from loader
         loaded_comments = loader.get_all_comments()
-        
         # Build ID → Comment mapping for fast CRUD operations
         id_to_comment_map = {str(c.comment_id): c for c in loaded_comments}
         
@@ -138,6 +146,10 @@ class DataManager(QObject):
         if "HR_gen" in self._files[path]["metadata"].get("channels", []):
             sig = loader.get_full_trace("HR_gen")
             self._files[path]["signal_cache"]["HR_gen"] = sig
+
+        # Emit data_updated signal with metadata for ChunkLoader
+        self.logger.debug(f"Emitting data_updated signal for: {path}")
+        self.data_updated.emit(path, self._files[path]["metadata"])
 
     def get_trace(self, path: str, channel: str, **kwargs) -> "Signal":
         """
@@ -198,9 +210,12 @@ class DataManager(QObject):
                 # Ensure HR_gen is in metadata
                 if "HR_gen" not in entry["metadata"]["channels"]:
                     entry["metadata"]["channels"].append("HR_gen")
-                self.logger.info(
-                    f"HR_gen added to metadata from {path} file [default config]"
-                )
+                    self.logger.info(
+                        f"HR_gen added to metadata from {path} file [default config]"
+                    )
+                    # Emit metadata_changed signal when HR_gen is added
+                    self.logger.debug(f"Emitting metadata_changed signal for HR_gen: {path}")
+                    self.metadata_changed.emit(path, entry["metadata"])
 
             return sig
 
@@ -221,6 +236,9 @@ class DataManager(QObject):
         # Make sure HR_gen is in metadata channels
         if "HR_gen" not in entry["metadata"]["channels"]:
             entry["metadata"]["channels"].append("HR_gen")
+            # Emit metadata_changed signal when HR_gen is promoted
+            self.logger.debug(f"Emitting metadata_changed signal for promoted HR_gen: {path}")
+            self.metadata_changed.emit(path, entry["metadata"])
         # Update hr_cache and keys if not already present
         if key not in entry["hr_cache"]:
             entry["hr_cache"][key] = hr_sig
@@ -331,30 +349,6 @@ class DataManager(QObject):
         """
         return self.get_comments_in_time_range(path, start_time, end_time)
     
-    def get_next_comment_id(self, path: str) -> int:
-        """
-        Generate next unique comment ID for this file.
-        Uses max(existing_ids) + 1 to ensure consistency.
-        
-        Args:
-            path: File path
-            
-        Returns:
-            int: Next available comment ID
-        """
-        if path not in self._files:
-            return 1
-            
-        comments = self._files[path]["comments"]
-        if not comments:
-            return 1
-            
-        # Get maximum existing ID
-        max_id = max(int(c.comment_id) for c in comments)
-        next_id = max_id + 1
-        
-        self.logger.debug(f"Generated next comment ID: {next_id} (max existing: {max_id})")
-        return next_id
 
     def get_metadata(self, path: str):
         """
@@ -436,6 +430,9 @@ class DataManager(QObject):
         if "HR_gen" not in entry["metadata"]["channels"]:
             entry["metadata"]["channels"].append("HR_gen")
             self.logger.info(f"HR_gen added to metadata from {path} file")
+            # Emit metadata_changed signal when HR_gen is added to cache
+            self.logger.debug(f"Emitting metadata_changed signal for cached HR_gen: {path}")
+            self.metadata_changed.emit(path, entry["metadata"])
 
         if key in entry["hr_cache_keys"]:
             entry["hr_cache_keys"].remove(key)
@@ -528,23 +525,11 @@ class DataManager(QObject):
         if file_path and file_path in self._time_cache:
             del self._time_cache[file_path]
         
-    def _handle_comment_create(self, file_path: str, comment_data: dict):
-        """Handle comment creation request from CommentManager"""
+    def _update_comment_cache_create(self, file_path: str, comment):
+        """Update cache after comment creation by CommentManager"""
         if file_path not in self._files:
             self.logger.error(f"File {file_path} not loaded")
             return
-            
-        # Generate unique ID for this file
-        next_id = self.get_next_comment_id(file_path)
-        
-        # Create EMSComment from data with generated ID
-        comment = EMSComment(
-            text=comment_data['text'],
-            time_sec=comment_data['time_sec'],
-            comment_id=next_id,
-            user_defined=comment_data['user_defined'],
-            label=comment_data['label']
-        )
         
         # Insert in sorted position for O(log n) binary search later
         comments = self._files[file_path]["comments"]
@@ -553,7 +538,7 @@ class DataManager(QObject):
         
         # Update ID → Comment mapping
         id_to_comment = self._files[file_path]["id_to_comment"]
-        id_to_comment[str(next_id)] = comment
+        id_to_comment[str(comment.comment_id)] = comment
         
         # Invalidate cache after modification
         self._invalidate_time_cache(file_path)
@@ -562,35 +547,29 @@ class DataManager(QObject):
         self.comment_added.emit(file_path, comment)
         self.comments_changed.emit(file_path)
         
-        self.logger.info(f"Comment {next_id} inserted at position {insert_pos} (time {comment.time:.2f}s) in {file_path}")
+        self.logger.debug(f"Cache updated: comment {comment.comment_id} added at {comment.time:.2f}s")
         
-    def _handle_comment_update(self, file_path: str, comment_id, updates: dict):
-        """Handle comment update request from CommentManager"""
+    def _update_comment_cache_update(self, file_path: str, comment_id: str, updates: dict):
+        """Update cache after comment update by CommentManager"""
         if file_path not in self._files:
             self.logger.error(f"File {file_path} not loaded")
             return
-            
-        # Find comment using fast ID mapping
-        if comment_id is None or comment_id == "":
-            self.logger.warning(f"Cannot update comment with None/empty ID")
-            return
-            
+        
         target_id_str = str(comment_id)
         id_to_comment = self._files[file_path]["id_to_comment"]
         
         # Fast O(1) lookup by ID
         comment = id_to_comment.get(target_id_str)
         if not comment:
-            available_ids = list(id_to_comment.keys())[:5]  # First 5 IDs
-            self.logger.warning(f"Comment '{target_id_str}' not found for update. Available IDs (first 5): {available_ids}")
+            self.logger.warning(f"Comment '{target_id_str}' not found in cache for update")
             return
         
         # Find position in sorted list (only when time changes)
         comments = self._files[file_path]["comments"]
-        comment_index = comments.index(comment)  # O(n) but only when needed
-            
+        
         # If time changes, need to reposition for sorted order
         if 'time_sec' in updates:
+            comment_index = comments.index(comment)
             # Remove from current position
             comments.pop(comment_index)
             
@@ -616,22 +595,14 @@ class DataManager(QObject):
         self.comment_updated.emit(file_path, comment)
         self.comments_changed.emit(file_path)
         
-        self.logger.info(f"Comment {comment_id} updated in {file_path}")
+        self.logger.debug(f"Cache updated: comment {comment_id} modified")
         
-    def _handle_comment_delete(self, file_path: str, comment_id):
-        """Handle comment deletion request from CommentManager"""
-        # Debug: Log what we receive
-        self.logger.debug(f"_handle_comment_delete called with: file_path='{file_path}', comment_id='{comment_id}' (type: {type(comment_id)})")
-        
+    def _update_comment_cache_delete(self, file_path: str, comment_id: str):
+        """Update cache after comment deletion by CommentManager"""
         if file_path not in self._files:
             self.logger.error(f"File {file_path} not loaded")
             return
-            
-        # Handle different ID types and None/empty cases
-        if comment_id is None or comment_id == "":
-            self.logger.warning(f"Cannot delete comment with None/empty ID")
-            return
-            
+        
         target_id_str = str(comment_id)
         
         # Use fast ID mapping to find comment
@@ -639,9 +610,7 @@ class DataManager(QObject):
         comment = id_to_comment.get(target_id_str)
         
         if not comment:
-            available_ids = list(id_to_comment.keys())[:5]  # First 5 IDs
-            self.logger.warning(f"Comment '{target_id_str}' not found for removal. Available IDs (first 5): {available_ids}")
-            self.logger.warning(f"Total comments in mapping: {len(id_to_comment)}")
+            self.logger.warning(f"Comment '{target_id_str}' not found in cache for deletion")
             return
         
         # Remove from both data structures
@@ -653,7 +622,7 @@ class DataManager(QObject):
         self._invalidate_time_cache(file_path)
         
         # Emit signals
-        self.comment_removed.emit(file_path, str(comment_id))
+        self.comment_removed.emit(file_path, comment_id)
         self.comments_changed.emit(file_path)
         
-        self.logger.info(f"Comment {target_id_str} removed from {file_path} (time: {comment.time:.2f}s)")
+        self.logger.debug(f"Cache updated: comment {comment_id} removed")

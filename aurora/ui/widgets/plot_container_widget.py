@@ -32,6 +32,7 @@ class PlotContainerWidget(QWidget):
     scroll_changed = Signal(float)  # scroll_position
     plots_reordered = Signal(list)  # new_order
     signal_changed_in_plot = Signal(str, str)  # old_signal, new_signal
+    time_range_changed = Signal(float, float)  # start_time, end_time - for all plots
 
     def __init__(self, parent=None, tab_type: str = None):
         super().__init__(parent)
@@ -144,10 +145,9 @@ class PlotContainerWidget(QWidget):
             # Create plots for signals
             self.create_plots()
 
-            # Load and display data
-            self.logger.info("Calling load_and_display_data()...")
-            self.load_and_display_data()
-            self.logger.info("load_and_display_data() completed")
+            # Trigger initial ChunkLoader request for first display
+            self.logger.info("Plots created - triggering initial ChunkLoader request")
+            self._request_initial_chunk_load()
 
             # Comments are handled by VisualizationBaseTab and rendered here when requested
 
@@ -159,6 +159,37 @@ class PlotContainerWidget(QWidget):
         except Exception as e:
             self.logger.error(f"Error displaying signals: {e}", exc_info=True)
             return False
+
+    def _request_initial_chunk_load(self):
+        """Request initial chunk load from parent tab's ChunkLoader."""
+        # Signal parent (VisualizationBaseTab) to load initial data
+        # This avoids direct coupling to session/chunk_loader
+        if hasattr(self.parent(), 'session') and hasattr(self.parent().session, 'chunk_loader'):
+            parent_tab = self.parent()
+            if (parent_tab.session.chunk_loader and 
+                hasattr(parent_tab, 'session') and 
+                parent_tab.session.selected_channels):
+                
+                try:
+                    chunk_loader = parent_tab.session.chunk_loader
+                    # Use current time window from parent
+                    start_time = getattr(parent_tab, 'start_time', 0.0)
+                    chunk_size = getattr(parent_tab, 'chunk_size', 60.0)
+                    hr_params = getattr(parent_tab, 'hr_params', {})
+                    
+                    chunk_loader.request_chunk(
+                        channel_names=parent_tab.session.selected_channels,
+                        start_sec=start_time,
+                        duration_sec=chunk_size,
+                        **hr_params
+                    )
+                    self.logger.debug(f"Initial chunk requested: {start_time:.2f}s")
+                except Exception as e:
+                    self.logger.error(f"Failed to request initial chunk: {e}")
+            else:
+                self.logger.warning("ChunkLoader not available for initial load")
+        else:
+            self.logger.warning("Parent tab not available for initial load")
 
     def create_plots(self):
         """Create plot widgets for target signals."""
@@ -186,6 +217,9 @@ class PlotContainerWidget(QWidget):
 
             # Connect to style manager for height changes
             self.style_manager.minHeightChanged.connect(plot.refresh_min_height)
+            
+            # Connect to time range changes for asynchronous updates
+            self.time_range_changed.connect(plot.set_time_range)
 
             # Add to splitter
             self.plots.append(plot)
@@ -267,6 +301,9 @@ class PlotContainerWidget(QWidget):
 
             # Connect to style manager for height changes
             self.style_manager.minHeightChanged.connect(plot.refresh_min_height)
+            
+            # Connect to time range changes for asynchronous updates
+            self.time_range_changed.connect(plot.set_time_range)
 
             # Comments are handled globally by PlotContainer, not per-plot
 
@@ -278,32 +315,8 @@ class PlotContainerWidget(QWidget):
             idx = self.plots_splitter.count() - 1
             self.plots_splitter.setStretchFactor(idx, 1)
 
-            # Load data for new plot
-            if self.data_manager and self.file_path:
-                try:
-                    signal = self.data_manager.get_trace(self.file_path, signal_name)
-                    if signal:
-                        # Calculate sample range
-                        start_sample = int(signal.fs * self.start_time)
-                        end_sample = int(
-                            signal.fs * (self.start_time + self.chunk_size)
-                        )
-                        end_sample = min(end_sample, len(signal.data))
-
-                        if start_sample < len(signal.data):
-                            # Extract data chunk
-                            chunk_data = signal.data[start_sample:end_sample]
-                            time_data = (
-                                np.arange(len(chunk_data)) / signal.fs + self.start_time
-                            )
-
-                            # Update plot
-                            plot.update_data(time_data, chunk_data)
-
-                except Exception as e:
-                    self.logger.error(
-                        f"Error loading data for new plot {signal_name}: {e}"
-                    )
+            # New plot will be populated by next ChunkLoader update
+            # No need to load data manually - ChunkLoader handles all data loading
 
             self.logger.debug(f"Added plot {signal_name} to splitter")
 
@@ -323,72 +336,14 @@ class PlotContainerWidget(QWidget):
             idx = self.target_signals.index(old_signal)
             self.target_signals[idx] = new_signal_name
 
-        # Reload data for the new signal
-        self.load_and_display_data()
+        # Signal change will trigger ChunkLoader refresh automatically
+        # No need for load_and_display_data() - ChunkLoader handles data loading
 
         self.logger.info(f"Plot signal changed from {old_signal} to {new_signal_name}")
         self.signal_changed_in_plot.emit(old_signal, new_signal_name)
 
-    def load_and_display_data(self):
-        """Load and display data for current time window."""
-        if not self.data_manager or not self.file_path:
-            return
-
-        try:
-            # Calculate time window
-            start_time = self.start_time
-            end_time = start_time + self.chunk_size
-
-            self.logger.debug(
-                f"Loading data for time window: {start_time:.1f}s - {end_time:.1f}s"
-            )
-
-            # Load data for each plot (fast - no ViewBox operations)
-            for plot in self.plots:
-                signal_name = plot.signal_name
-
-                try:
-                    # Get signal from data manager
-                    signal = self.data_manager.get_trace(self.file_path, signal_name)
-                    if signal is None:
-                        self.logger.warning(f"No data for signal {signal_name}")
-                        continue
-
-                    # Calculate sample range
-                    start_sample = int(signal.fs * start_time)
-                    end_sample = int(signal.fs * end_time)
-                    end_sample = min(end_sample, len(signal.data))
-
-                    if start_sample >= len(signal.data):
-                        self.logger.warning(
-                            f"Start time beyond signal length for {signal_name}"
-                        )
-                        continue
-
-                    # Extract data chunk
-                    chunk_data = signal.data[start_sample:end_sample]
-
-                    # Create time array
-                    time_data = np.arange(len(chunk_data)) / signal.fs + start_time
-
-                    # Update plot
-                    plot.update_data(time_data, chunk_data)
-
-
-                except Exception as e:
-                    self.logger.error(
-                        f"Error loading data for signal {signal_name}: {e}"
-                    )
-
-            # Set time range for all plots ONCE (batch operation)
-            if self.plots:
-                for plot in self.plots:
-                    plot.set_time_range(start_time, end_time)
-
-            # Comments are rendered when VisualizationBaseTab calls refresh_comment_display()
-
-        except Exception as e:
-            self.logger.error(f"Error loading and displaying data: {e}")
+    # load_and_display_data() REMOVED - obsolete method
+    # All data loading is now handled exclusively by ChunkLoader -> update_chunk_data()
 
     def refresh_comment_display(self, comments_to_render):
         """
@@ -772,36 +727,21 @@ class PlotContainerWidget(QWidget):
     # ========= Navigation Interface =========
     # Navigation is handled by VisualizationBaseTab, PlotContainer only responds to changes
 
-    def set_time_window(self, start_time: float, chunk_size: float):
-        """Set time window and reload data. Called by parent tab."""
-        self.start_time = start_time
-        self.chunk_size = chunk_size
-        self.load_and_display_data()
+    # set_time_window() REMOVED - now using ChunkLoader exclusively
+    # Navigation is handled through update_chunk_data() from ChunkLoader only
 
-    def update_chunk_data(
-        self, start_sec: float, end_sec: float, data_dict: Dict[str, np.ndarray]
-    ):
+    def update_chunk_data(self, start_sec: float, end_sec: float, data_dict: Dict[str, np.ndarray]):
         """
-        Update plots with chunk data from ChunkLoader.
-
-        This method is called by ChunkLoader to efficiently update plots with
-        pre-loaded and downsampled chunk data.
-
-        Args:
-            start_sec: Start time of the chunk
-            end_sec: End time of the chunk
-            data_dict: Dictionary mapping channel names to numpy arrays
+        Update plots with chunk data (simplified like working tree).
         """
         try:
-            self.logger.debug(
-                f"Updating plots with chunk data: {start_sec:.2f}-{end_sec:.2f}s"
-            )
+            self.logger.debug(f"Updating plots: {start_sec:.2f}-{end_sec:.2f}s")
 
             # Update internal time state
             self.start_time = start_sec
             self.chunk_size = end_sec - start_sec
 
-            # Update each visible channel plot
+            # Update each visible channel plot (like working tree)
             for i, channel_name in enumerate(self.target_signals):
                 if i >= len(self.plots):
                     continue
@@ -810,71 +750,28 @@ class PlotContainerWidget(QWidget):
                 chunk_data = data_dict.get(channel_name, np.array([]))
 
                 if chunk_data.size == 0:
-                    # No data for this channel - clear the plot
                     plot_widget.plot_widget.clear()
                     continue
 
                 try:
-                    # Get signal for sampling frequency
-                    if (
-                        hasattr(self, "data_manager")
-                        and hasattr(self, "file_path")
-                        and self.data_manager
-                        and self.file_path
-                    ):
-
-                        sig = self.data_manager.get_trace(self.file_path, channel_name)
-                        fs = sig.fs if sig else 1000.0  # Default fallback
+                    # Create time axis based on real chunk duration (handles downsampled data correctly)
+                    if len(chunk_data) > 0:
+                        chunk_duration = end_sec - start_sec
+                        time_axis = np.linspace(start_sec, end_sec, len(chunk_data))
                     else:
-                        fs = 1000.0  # Default sampling frequency
+                        time_axis = np.array([])
 
-                    # Create time axis
-                    t = np.arange(len(chunk_data)) / fs + start_sec
+                    # Update plot data
+                    plot_widget.update_data(time_axis, chunk_data)
 
-                    # Update plot data efficiently - use correct API for CustomPlot
-                    plot_widget.plot_widget.clear()
-                    
-                    # Get pen from style manager (CustomPlot architecture)
-                    pen = plot_widget.style_manager.create_plot_pen(plot_widget.signal_name, plot_widget.custom_style)
-                    plot_widget.plot_widget.plot(t, chunk_data, pen=pen)
-
-                    # Set plot ranges
-                    plot_widget.plot_widget.setXRange(start_sec, end_sec, padding=0)
-
-                    # Apply Y range if available
-                    if (
-                        hasattr(plot_widget, "auto_range_y")
-                        and not plot_widget.auto_range_y
-                    ):
-                        if hasattr(plot_widget, "y_min") and hasattr(
-                            plot_widget, "y_max"
-                        ):
-                            plot_widget.plot_widget.setYRange(
-                                plot_widget.y_min, plot_widget.y_max
-                            )
-                        else:
-                            # Auto-range Y based on visible data
-                            if len(chunk_data) > 0:
-                                y_min, y_max = np.nanmin(chunk_data), np.nanmax(
-                                    chunk_data
-                                )
-                                margin = (y_max - y_min) * 0.1 if y_max > y_min else 1.0
-                                plot_widget.plot_widget.setYRange(
-                                    y_min - margin, y_max + margin
-                                )
-
-                    self.logger.debug(
-                        f"Updated plot {i} ({channel_name}): {len(chunk_data)} points"
-                    )
+                    self.logger.debug(f"Updated plot {i} ({channel_name}): {len(chunk_data)} points")
 
                 except Exception as e:
-                    self.logger.error(
-                        f"Failed to update plot {i} ({channel_name}): {e}"
-                    )
+                    self.logger.error(f"Failed to update plot {i} ({channel_name}): {e}")
                     continue
 
-            # Comments are handled by VisualizationBaseTab calling refresh_comment_display()
-            # No need to update here - will be refreshed automatically
+            # Set time range for all plots
+            self.time_range_changed.emit(start_sec, end_sec)
 
         except Exception as e:
             self.logger.error(f"Failed to update chunk data: {e}", exc_info=True)
