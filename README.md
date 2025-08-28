@@ -60,7 +60,7 @@ aurora/
 ├── main.py                                                         # Entry point for the application
 │
 ├── core/
-│   ├── comments.py                                                 # EMSComment class and CommentManager (event-driven architecture)
+│   ├── comments.py                                                 # EMSComment class and CommentManager (CRUD business logic)
 │   ├── config_manager.py                                           # Configuration management and persistence
 │   ├── logging_config.py                                           # Logging system configuration
 │   ├── session.py                                                  # Session management and file loading
@@ -70,10 +70,11 @@ aurora/
 ├── data/
 │   ├── aditch_loader.py                                            # Loader for .adicht LabChart files using adi-reader
 │   ├── base_loader.py                                              # Abstract base loader interface
-│   └── data_manager.py                                             # File and signal management, dual-structure comment system
+│   ├── data_manager.py                                             # File and signal management, cache updates only
+│   └── edf_loader.py                                               # Loader for EDF files (extensible architecture)
 │
 ├── processing/
-│   ├── chunk_loader.py                                             # Asynchronous chunked signal loading with caching
+│   ├── chunk_loader.py                                             # Optimized chunk loading with intelligent downsampling
 │   ├── ecg_analyzer.py                                             # Wavelet-based R-peak detection and HR generation
 │   ├── hemodynamic_analyzer.py                                     # Hemodynamic signal analysis
 │   ├── interval_extractor.py                                       # Event extraction from annotations
@@ -102,9 +103,9 @@ aurora/
 │   │   └── selectable_viewbox.py                                   # Interactive ViewBox with selection
 │   │
 │   └── widgets/
-│       ├── comment_list_widget.py                                  # Comment table and management widget
+│       ├── comment_list_widget.py                                  # Comment table and CRUD interface
 │       ├── custom_plot.py                                          # Custom plot widget with PyQtGraph
-│       └── plot_container_widget.py                                # Container for multiple signal plots
+│       └── plot_container_widget.py                                # Container for multiple signal plots with markers
 │
 ├── config/
 │   └── aurora_config.json                                          # Application configuration file
