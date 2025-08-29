@@ -1,30 +1,30 @@
 """
 interval_extractor.py
---------------------
-Utilidad para extraer intervalos de eventos (coms y tilt) desde los comentarios de señales fisiológicas.
+---------------------
+Utility to extract event intervals (general 'coms' events and tilt events) from physiological signal comments.
 """
 
 
 def extract_event_intervals(signals, coms=None):
     """
-    Extrae intervalos de eventos (coms y tilt) desde una lista de señales.
+    Extract event intervals (general events and tilt) from a list of signals.
     Args:
-        signals (list): Lista de objetos Signal, cada uno con MarkerData.
-        coms (list): Palabras clave para eventos generales (ej: ['Tilt', 'Stand', ...])
+        signals (list): List of Signal objects, each with MarkerData.
+        coms (list): Keywords for general events (e.g., ['Tilt', 'Stand', ...])
     Returns:
-        list[dict]: Lista de intervalos detectados, sin duplicados.
+        list[dict]: List of detected intervals without duplicates.
     """
     if coms is None:
         coms = ["Tilt", "Stand", "Hyperventilation", "Valsalva"]
-    intervalos = []
+    intervalos = []  # Collected intervals
     seen = set()
-    # Estado para intervalos generales
+    # State tracking for general intervals
     en_intervalo = False
     t_baseline = None
     evento = None
     t_evento = None
     t_recovery = None
-    # Estado para tilt (independiente)
+    # Independent state for tilt
     en_tilt = False
     t_tilt_angle = None
     nombre_tilt = None
@@ -33,7 +33,7 @@ def extract_event_intervals(signals, coms=None):
         for marker in getattr(sig, "MarkerData", []):
             texto = getattr(marker, "text", "") or ""
             tiempo = getattr(marker, "time", None)
-            # Detección de tilt: independiente de otros eventos
+            # Tilt detection: independent of other event logic
             if (not en_tilt) and ("tilt angle" in texto.lower()):
                 en_tilt = True
                 t_tilt_angle = tiempo
@@ -53,7 +53,7 @@ def extract_event_intervals(signals, coms=None):
                 en_tilt = False
                 t_tilt_angle = None
                 nombre_tilt = None
-            # Intervalos generales Baseline -> evento coms -> Recovery
+            # General interval: Baseline -> event (coms) -> Recovery
             if not en_intervalo and texto.strip().lower() == "baseline":
                 en_intervalo = True
                 t_baseline = tiempo

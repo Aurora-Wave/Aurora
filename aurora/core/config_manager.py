@@ -17,7 +17,13 @@ class ConfigManager:
         """Initialize configuration with embedded defaults."""
         # UI Settings
         self.default_chunk_size: float = 60.0
-        self.default_visible_channels: List[str] = ["HR_gen", "ECG", "FBP", "Valsalva"]
+        # HR_gen channel renamed to hr_aurora (keep lowercase for consistency)
+        self.default_visible_channels: List[str] = [
+            "hr_aurora",
+            "ECG",
+            "FBP",
+            "Valsalva",
+        ]
         self.export_format: str = "csv"
         self.last_file_path: str = ""
 

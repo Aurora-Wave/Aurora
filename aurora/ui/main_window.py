@@ -180,68 +180,61 @@ class MainWindow(QMainWindow):
             from aurora.ui.dialogs import ExportConfigDialog
             from aurora.processing.hemodynamic_analyzer import HemodynamicAnalyzer
 
-            self.logger.info(f"Iniciando exportación para sesión: {session.session_id}")
+            self.logger.info(f"Starting export for session: {session.session_id}")
 
-            # Detectar protocolo automáticamente (placeholder por ahora)
+            # Automatically detect protocol (placeholder logic for now)
             detected_protocol = self._detect_protocol(session)
-
-            # Abrir diálogo de configuración de exportación
+            # Open export configuration dialog
             export_dialog = ExportConfigDialog(session, detected_protocol, self)
 
             if export_dialog.exec() == QDialog.DialogCode.Accepted:
-                # Obtener configuración de exportación
+                # Retrieve export configuration
                 export_config = export_dialog.get_export_config()
-
-                # Ejecutar proceso de exportación
+                # Execute export process
                 success = self._execute_export(export_config)
 
                 if success:
                     QMessageBox.information(
                         self,
-                        "Exportación Exitosa",
-                        f"✅ Datos exportados correctamente.\n"
-                        f"Archivo: {export_config.get('output_path', 'N/A')}",
+                        "Export Successful",
+                        f"✅ Data exported successfully.\n"
+                        f"File: {export_config.get('output_path', 'N/A')}",
                     )
-                    self.logger.info("Exportación completada exitosamente")
+                    self.logger.info("Export completed successfully")
                 else:
                     QMessageBox.warning(
                         self,
-                        "Error de Exportación",
-                        "❌ Error durante el proceso de exportación.\n"
-                        "Revisar logs para detalles.",
+                        "Export Error",
+                        "❌ Error during export process.\nCheck logs for details.",
                     )
             else:
-                self.logger.info("Exportación cancelada por usuario")
+                self.logger.info("Export cancelled by user")
 
         except ImportError as e:
-            self.logger.error(f"Error importando módulos de exportación: {e}")
+            self.logger.error(f"Error importing export modules: {e}")
             QMessageBox.critical(
                 self,
-                "Error de Módulos",
-                f"Error cargando componentes de exportación:\n{e}",
+                "Module Error",
+                f"Error loading export components:\n{e}",
             )
         except Exception as e:
-            self.logger.error(f"Error durante exportación: {e}", exc_info=True)
-            QMessageBox.critical(
-                self, "Error Inesperado", f"Error durante exportación:\n{e}"
-            )
+            self.logger.error(f"Unexpected error during export: {e}", exc_info=True)
+            QMessageBox.critical(self, "Unexpected Error", f"Error during export:\n{e}")
 
     def _detect_protocol(self, session) -> str:
-        """
-        Detecta automáticamente el tipo de protocolo basado en comentarios.
+        """Automatically detect protocol type based on session comments/events.
 
         Args:
-            session: Sesión activa con datos cargados
+            session: Active session with loaded data
 
         Returns:
-            str: Tipo de protocolo detectado ("stand", "tilt", "lbnp", "custom")
+            str: Detected protocol type ("stand", "tilt", "lbnp", "custom")
         """
         try:
-            # Obtener comentarios/intervalos de la sesión
+            # Get session event intervals / comments
             if hasattr(session, "file_path") and session.file_path:
                 intervals = session.data_manager.get_event_intervals(session.file_path)
-
-                # Buscar patrones de protocolo en eventos
+                # Look for protocol patterns in events
                 events = [interval.get("evento", "").lower() for interval in intervals]
                 all_events = " ".join(events)
 
@@ -253,20 +246,18 @@ class MainWindow(QMainWindow):
                     return "lbnp"
 
         except Exception as e:
-            self.logger.warning(f"Error detectando protocolo: {e}")
-
-        # Protocolo por defecto
+            self.logger.warning(f"Error detecting protocol: {e}")
+        # Default protocol
         return "stand"
 
     def _execute_export(self, export_config: dict) -> bool:
-        """
-        Ejecuta el proceso de exportación con la configuración especificada.
+        """Execute export process with specified configuration.
 
         Args:
-            export_config: Configuración de exportación del diálogo
+            export_config: Export configuration from dialog
 
         Returns:
-            bool: True si exportación exitosa, False en caso contrario
+            bool: True if export successful, False otherwise
         """
         try:
             from aurora.processing.hemodynamic_analyzer import HemodynamicAnalyzer
@@ -278,21 +269,23 @@ class MainWindow(QMainWindow):
             output_path = export_config["output_path"]
 
             if not output_path:
-                self.logger.error("Ruta de salida no especificada")
+                self.logger.error("Output path not specified")
                 return False
 
-            self.logger.info(f"Iniciando exportación a: {output_path}")
+            self.logger.info(f"Starting export to: {output_path}")
 
-            # Cargar señales seleccionadas
+            # Load selected signals
             signals = {}
             for signal_name in export_config["signals"]:
                 try:
-                    if signal_name.startswith("HR_gen"):
-                        # Extraer parámetros HR_gen si están en el nombre
-                        # Por ahora usar configuración por defecto
+                    if signal_name.startswith("HR_gen") or signal_name.startswith(
+                        "hr_aurora"
+                    ):
+                        # (Future) Extract hr_aurora parameters from name (legacy HR_gen compatibility)
+                        # Currently using default configuration
                         signal = session.data_manager.get_trace(
                             session.file_path,
-                            "HR_gen",
+                            "hr_aurora",
                             wavelet="haar",
                             level=4,
                             min_rr_sec=0.6,
@@ -303,16 +296,16 @@ class MainWindow(QMainWindow):
                         )
 
                     signals[signal_name] = signal
-                    self.logger.debug(f"Señal cargada: {signal_name}")
+                    self.logger.debug(f"Signal loaded: {signal_name}")
 
                 except Exception as e:
-                    self.logger.error(f"Error cargando señal {signal_name}: {e}")
+                    self.logger.error(f"Error loading signal {signal_name}: {e}")
 
             if not signals:
-                self.logger.error("No se pudieron cargar señales")
+                self.logger.error("Could not load any signals")
                 return False
 
-            # Realizar análisis hemodinámico
+            # Perform hemodynamic analysis
             analyzer = HemodynamicAnalyzer(self.logger)
             protocol_key = export_config["protocol"]["key"]
 
@@ -320,37 +313,35 @@ class MainWindow(QMainWindow):
                 signals, protocol_key
             )
 
-            # Generar datos para CSV en formato RedCap
+            # Generate CSV data (RedCap-like format)
             csv_data = self._format_results_for_redcap(analysis_results, export_config)
-
-            # Escribir archivo CSV
+            # Write CSV file
             self._write_csv_file(csv_data, output_path, export_config)
 
-            self.logger.info("Exportación completada exitosamente")
+            self.logger.info("Export completed successfully")
             return True
 
         except Exception as e:
-            self.logger.error(f"Error durante exportación: {e}", exc_info=True)
+            self.logger.error(f"Error during export: {e}", exc_info=True)
             return False
 
     def _format_results_for_redcap(self, analysis_results: dict, config: dict) -> dict:
-        """
-        Formatea los resultados del análisis para exportación RedCap.
+        """Format analysis results for RedCap-like CSV export.
 
         Args:
-            analysis_results: Resultados del HemodynamicAnalyzer
-            config: Configuración de exportación
+            analysis_results: Results from HemodynamicAnalyzer
+            config: Export configuration
 
         Returns:
-            dict: Datos formateados para CSV
+            dict: Formatted data row for CSV
         """
         participant_id = config["participant_id"]
         prefix = config["protocol"]["prefix"]
 
-        # Inicializar fila de datos
+        # Initialize data row
         row_data = {"parti_id": f"{participant_id:03d}"}
 
-        # Agregar datos de ventanas temporales
+        # Add temporal window data
         temporal_windows = analysis_results.get("temporal_windows", {})
         temporal_points = config.get("temporal_points", [])
 
@@ -360,13 +351,13 @@ class MainWindow(QMainWindow):
                     column_name = f"{prefix}{time_point}s_{signal_name.lower()}"
                     row_data[column_name] = round(values[time_point], 6)
 
-        # Agregar eventos de nadir
+        # Add nadir events
         nadir_events = analysis_results.get("nadir_events", {})
         if nadir_events.get("found"):
             row_data[f"{prefix}nadir_time"] = round(nadir_events["time"], 1)
             row_data[f"{prefix}nadir_sbp"] = round(nadir_events["sbp"], 0)
 
-        # Agregar eventos de pico HR
+        # Add HR peak events
         peak_events = analysis_results.get("peak_events", {})
         for event_name, event_data in peak_events.items():
             if "hr" in event_data:
@@ -374,7 +365,7 @@ class MainWindow(QMainWindow):
             if "time" in event_data:
                 row_data[f"{prefix}{event_name}_time"] = round(event_data["time"], 1)
 
-        # Agregar estadísticas de últimos 5 minutos
+        # Add last 5 minutes statistics
         statistics = analysis_results.get("statistics", {})
         for stat_name, stat_values in statistics.items():
             for stat_type, value in stat_values.items():
@@ -384,38 +375,37 @@ class MainWindow(QMainWindow):
         return row_data
 
     def _write_csv_file(self, data: dict, output_path: str, config: dict):
-        """
-        Escribe los datos al archivo CSV.
+        """Write formatted data to CSV file.
 
         Args:
-            data: Datos a escribir
-            output_path: Ruta del archivo de salida
-            config: Configuración de exportación
+            data: Data row to write
+            output_path: Output CSV file path
+            config: Export configuration
         """
         import csv
 
-        # Escribir CSV con separador de coma (estándar RedCap)
+        # Write CSV with comma separator (RedCap standard)
         with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
             if data:
                 fieldnames = list(data.keys())
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-                # Escribir encabezado
+                # Write header
                 writer.writeheader()
 
-                # Escribir datos
+                # Write data row
                 writer.writerow(data)
 
-                self.logger.info(f"CSV escrito con {len(fieldnames)} columnas")
+                self.logger.info(f"CSV written with {len(fieldnames)} columns")
             else:
-                self.logger.warning("No hay datos para escribir en CSV")
+                self.logger.warning("No data to write to CSV")
 
     def _open_config_dialog(self):
-        """Abre el diálogo de configuración general."""
+        """Open general configuration dialog."""
         dialog = ConfigDialog(self)
         if dialog.exec() == QDialog.Accepted:
-            # Configuración guardada - podría activar actualización en sesiones si fuera necesario
-            self.logger.info("Configuración actualizada por usuario")
+            # Configuration saved - (future) propagate to sessions if needed
+            self.logger.info("Configuration updated by user")
 
     def _on_session_created(self, session_id: str, session):
         """Handle new session created by SessionManager."""

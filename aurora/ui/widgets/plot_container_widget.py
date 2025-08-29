@@ -129,10 +129,10 @@ class PlotContainerWidget(QWidget):
             target_signals: List of signals to display
             hr_params: HR generation parameters (for future use)
         """
-        self.logger.info(f"=== PlotContainer display_signals START ===")
-        self.logger.info(f"File: {file_path}")
-        self.logger.info(f"Target signals: {target_signals}")
-        self.logger.info(f"DataManager type: {type(data_manager)}")
+        # Demote a DEBUG para evitar ruido en cada refresco
+        self.logger.debug(
+            f"display_signals start file={file_path} targets={target_signals} dm={type(data_manager)}"
+        )
 
         try:
             self.data_manager = data_manager
@@ -146,14 +146,12 @@ class PlotContainerWidget(QWidget):
             self.create_plots()
 
             # Trigger initial ChunkLoader request for first display
-            self.logger.info("Plots created - triggering initial ChunkLoader request")
+            self.logger.debug("Plots created - triggering initial ChunkLoader request")
             self._request_initial_chunk_load()
 
             # Comments are handled by VisualizationBaseTab and rendered here when requested
 
-            self.logger.info(
-                f"=== PlotContainer display_signals SUCCESS with {len(target_signals)} signals ==="
-            )
+            self.logger.debug(f"display_signals success count={len(target_signals)}")
             return True
 
         except Exception as e:
@@ -164,24 +162,28 @@ class PlotContainerWidget(QWidget):
         """Request initial chunk load from parent tab's ChunkLoader."""
         # Signal parent (VisualizationBaseTab) to load initial data
         # This avoids direct coupling to session/chunk_loader
-        if hasattr(self.parent(), 'session') and hasattr(self.parent().session, 'chunk_loader'):
+        if hasattr(self.parent(), "session") and hasattr(
+            self.parent().session, "chunk_loader"
+        ):
             parent_tab = self.parent()
-            if (parent_tab.session.chunk_loader and 
-                hasattr(parent_tab, 'session') and 
-                parent_tab.session.selected_channels):
-                
+            if (
+                parent_tab.session.chunk_loader
+                and hasattr(parent_tab, "session")
+                and parent_tab.session.selected_channels
+            ):
+
                 try:
                     chunk_loader = parent_tab.session.chunk_loader
                     # Use current time window from parent
-                    start_time = getattr(parent_tab, 'start_time', 0.0)
-                    chunk_size = getattr(parent_tab, 'chunk_size', 60.0)
-                    hr_params = getattr(parent_tab, 'hr_params', {})
-                    
+                    start_time = getattr(parent_tab, "start_time", 0.0)
+                    chunk_size = getattr(parent_tab, "chunk_size", 60.0)
+                    hr_params = getattr(parent_tab, "hr_params", {})
+
                     chunk_loader.request_chunk(
                         channel_names=parent_tab.session.selected_channels,
                         start_sec=start_time,
                         duration_sec=chunk_size,
-                        **hr_params
+                        **hr_params,
                     )
                     self.logger.debug(f"Initial chunk requested: {start_time:.2f}s")
                 except Exception as e:
@@ -217,7 +219,7 @@ class PlotContainerWidget(QWidget):
 
             # Connect to style manager for height changes
             self.style_manager.minHeightChanged.connect(plot.refresh_min_height)
-            
+
             # Connect to time range changes for asynchronous updates
             self.time_range_changed.connect(plot.set_time_range)
 
@@ -229,7 +231,7 @@ class PlotContainerWidget(QWidget):
             idx = self.plots_splitter.count() - 1
             self.plots_splitter.setStretchFactor(idx, 1)
 
-        self.logger.info(f"Created {len(self.plots)} plots total")
+        self.logger.debug(f"Created {len(self.plots)} plots total")
 
         # CRITICAL: Calculate and set total splitter size for scroll area
         self._update_splitter_size()
@@ -301,7 +303,7 @@ class PlotContainerWidget(QWidget):
 
             # Connect to style manager for height changes
             self.style_manager.minHeightChanged.connect(plot.refresh_min_height)
-            
+
             # Connect to time range changes for asynchronous updates
             self.time_range_changed.connect(plot.set_time_range)
 
@@ -339,7 +341,7 @@ class PlotContainerWidget(QWidget):
         # Signal change will trigger ChunkLoader refresh automatically
         # No need for load_and_display_data() - ChunkLoader handles data loading
 
-        self.logger.info(f"Plot signal changed from {old_signal} to {new_signal_name}")
+        self.logger.debug(f"Plot signal changed {old_signal} -> {new_signal_name}")
         self.signal_changed_in_plot.emit(old_signal, new_signal_name)
 
     # load_and_display_data() REMOVED - obsolete method
@@ -561,17 +563,15 @@ class PlotContainerWidget(QWidget):
         # Get available height in scroll area viewport
         viewport_height = self.scroll_area.viewport().height()
 
-        self.logger.info(f"🔍 SPLITTER SIZE CALCULATION:")
-        self.logger.info(f"  - Plots count: {len(self.plots)}")
-        self.logger.info(
-            f"  - Individual minimumHeight(): {[plot.minimumHeight() for plot in self.plots]}"
-        )
-        self.logger.info(f"  - Total minimum required: {total_min_height}px")
-        self.logger.info(f"  - Handle padding: {handle_padding}px")
-        self.logger.info(f"  - Total required: {total_height}px")
-        self.logger.info(f"  - Viewport available: {viewport_height}px")
-        self.logger.info(
-            f"  - Condition (total > viewport): {total_height > viewport_height}"
+        self.logger.debug(
+            "Splitter calc | plots=%d indiv=%s total_min=%d pad=%d total=%d viewport=%d overflow=%s",
+            len(self.plots),
+            [plot.minimumHeight() for plot in self.plots],
+            total_min_height,
+            handle_padding,
+            total_height,
+            viewport_height,
+            total_height > viewport_height,
         )
 
         # CRITICAL: Force splitter to respect minimum heights only when necessary
@@ -604,8 +604,8 @@ class PlotContainerWidget(QWidget):
 
     def _on_global_height_changed(self, new_min: int):
         """Handle global minimum height change from style manager."""
-        self.logger.info(
-            f"Global minimum height changed to {new_min}px, updating splitter size"
+        self.logger.debug(
+            f"Global minimum height changed to {new_min}px -> updating splitter"
         )
         # The individual plots will have already updated their minimum heights
         # Now we need to update the splitter total size
@@ -624,9 +624,9 @@ class PlotContainerWidget(QWidget):
         for plot in self.plots:
             plot.setMinimumHeight(0)
 
-        self.logger.info(f"🖱️ USER RESIZE: pos={pos}, idx={index}")
-        self.logger.info(f"  - Plots count: {len(self.plots)}")
-        self.logger.info(f"  - Removed all constraints temporarily")
+        self.logger.debug(
+            f"User resize pos={pos} idx={index} plots={len(self.plots)} constraints_dropped=1"
+        )
 
     def _on_resize_timeout(self):
         """Called when user stops resizing for timeout period."""
@@ -635,11 +635,9 @@ class PlotContainerWidget(QWidget):
         # Restore individual plot minimum heights
         for plot in self.plots:
             plot.setMinimumHeight(plot.min_height)
-
-        self.logger.info("User finished manual resizing, restoring constraints")
-
-        # Restore minimum height constraints after user finishes
-        QTimer.singleShot(100, self._update_splitter_size)
+            self.logger.debug("User resize finished - restoring constraints")
+            # Restore minimum height constraints after user finishes
+            QTimer.singleShot(100, self._update_splitter_size)
 
     def eventFilter(self, obj, event):
         """Event filter to detect scroll area resize events."""
@@ -730,7 +728,9 @@ class PlotContainerWidget(QWidget):
     # set_time_window() REMOVED - now using ChunkLoader exclusively
     # Navigation is handled through update_chunk_data() from ChunkLoader only
 
-    def update_chunk_data(self, start_sec: float, end_sec: float, data_dict: Dict[str, np.ndarray]):
+    def update_chunk_data(
+        self, start_sec: float, end_sec: float, data_dict: Dict[str, np.ndarray]
+    ):
         """
         Update plots with chunk data (simplified like working tree).
         """
@@ -764,10 +764,14 @@ class PlotContainerWidget(QWidget):
                     # Update plot data
                     plot_widget.update_data(time_axis, chunk_data)
 
-                    self.logger.debug(f"Updated plot {i} ({channel_name}): {len(chunk_data)} points")
+                    self.logger.debug(
+                        f"Updated plot {i} ({channel_name}): {len(chunk_data)} points"
+                    )
 
                 except Exception as e:
-                    self.logger.error(f"Failed to update plot {i} ({channel_name}): {e}")
+                    self.logger.error(
+                        f"Failed to update plot {i} ({channel_name}): {e}"
+                    )
                     continue
 
             # Set time range for all plots

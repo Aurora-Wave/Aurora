@@ -69,7 +69,7 @@ class VisualizationBaseTab(QWidget):
         self.is_data_loaded = False
         self.current_signals: List[str] = []
         self.current_parameters: Dict = {}
-        
+
         # HR parameters for ChunkLoader - initialize to avoid AttributeError
         self.hr_params: Dict = {}
 
@@ -134,10 +134,10 @@ class VisualizationBaseTab(QWidget):
                 chunk_loader.chunk_loaded.connect(self._on_chunk_loaded)
                 chunk_loader.chunk_error.connect(self._on_chunk_error)
                 self.logger.debug("ChunkLoader signals connected")
-                
+
                 # Request initial chunk load now that signals are connected
                 self._request_initial_chunk_load()
-                
+
             except Exception as e:
                 self.logger.error(f"Failed to connect ChunkLoader signals: {e}")
         else:
@@ -145,24 +145,30 @@ class VisualizationBaseTab(QWidget):
 
     def _request_initial_chunk_load(self):
         """Request initial chunk load from ChunkLoader."""
-        if (hasattr(self.session, 'chunk_loader') and 
-            self.session.chunk_loader and 
-            self.session.selected_channels):
+        if (
+            hasattr(self.session, "chunk_loader")
+            and self.session.chunk_loader
+            and self.session.selected_channels
+        ):
             try:
                 chunk_loader = self.session.chunk_loader
-                hr_params = getattr(self, 'hr_params', {})
-                
+                hr_params = getattr(self, "hr_params", {})
+
                 chunk_loader.request_chunk(
                     channel_names=self.session.selected_channels,
                     start_sec=self.start_time,
                     duration_sec=self.chunk_size,
-                    **hr_params
+                    **hr_params,
                 )
-                self.logger.info(f"Initial chunk requested: {self.start_time:.2f}s duration: {self.chunk_size:.2f}s")
+                self.logger.info(
+                    f"Initial chunk requested: {self.start_time:.2f}s duration: {self.chunk_size:.2f}s"
+                )
             except Exception as e:
                 self.logger.error(f"Failed to request initial chunk: {e}")
         else:
-            self.logger.warning("ChunkLoader or selected channels not available for initial load")
+            self.logger.warning(
+                "ChunkLoader or selected channels not available for initial load"
+            )
 
     def _on_chunk_loaded(self, start_sec: float, end_sec: float, data_dict: dict):
         """Handle chunk data loaded from ChunkLoader (simplified like working tree)."""
@@ -174,14 +180,14 @@ class VisualizationBaseTab(QWidget):
         if self.plot_container:
             try:
                 self.plot_container.update_chunk_data(start_sec, end_sec, data_dict)
-                
+
                 # Update internal time state to match chunk
                 self.start_time = start_sec
                 self.chunk_size = end_sec - start_sec
-                
+
                 # Refresh comment markers for the new time window
                 self.refresh_comment_markers()
-                
+
             except Exception as e:
                 self.logger.error(
                     f"Failed to update plot container with chunk data: {e}"
@@ -401,12 +407,12 @@ class VisualizationBaseTab(QWidget):
             self.current_parameters = hr_params.copy()
             self.hr_params = hr_params.copy()  # Store for ChunkLoader
 
-            # TEMPORARILY DISABLED: Connect to DataManager signals if not already connected
-            # try:
-            #     data_manager.comments_changed.connect(self._on_comments_changed)
-            # except TypeError:
-            #     # Already connected, which is fine
-            #     pass
+            # Connect comment signals (re-enabled)
+            try:
+                data_manager.comments_changed.connect(self._on_comments_changed)
+            except TypeError:
+                # Already connected
+                pass
 
             # Update tab data (delegates to subclass implementation)
             success = self.update_tab_data(
@@ -520,7 +526,7 @@ class VisualizationBaseTab(QWidget):
         self.chunk_size = float(value)
         self._set_duration(self.duration)  # Update ranges
 
-        # Use ChunkLoader for all navigation - consistent with slider behavior  
+        # Use ChunkLoader for all navigation - consistent with slider behavior
         if (
             hasattr(self.session, "chunk_loader")
             and self.session.chunk_loader
@@ -536,7 +542,9 @@ class VisualizationBaseTab(QWidget):
                 )
                 self.logger.debug(f"Chunk requested with new chunk size: {value:.2f}s")
             except Exception as e:
-                self.logger.error(f"ChunkLoader request with new chunk size failed: {e}")
+                self.logger.error(
+                    f"ChunkLoader request with new chunk size failed: {e}"
+                )
         else:
             self.logger.warning("ChunkLoader not available for chunk size change")
 
@@ -651,7 +659,7 @@ class VisualizationBaseTab(QWidget):
         """Get comments within a specific time range using optimized binary search."""
         if not self.session or not self.session.file_path:
             return []
-        
+
         # Use DataManager's optimized binary search with caching
         return self.session.data_manager.get_comments_in_time_range(
             self.session.file_path, start_time, end_time

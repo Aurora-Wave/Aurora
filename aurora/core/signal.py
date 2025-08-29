@@ -62,7 +62,7 @@ class Signal:
         )
 
 
-class HR_Gen_Signal(Signal):
+class HRAuroraSignal(Signal):
     """
     Specialized Signal for derived HR: integrates R-peak detection
     and incremental HR updates.
@@ -187,6 +187,10 @@ class HR_Gen_Signal(Signal):
             units="bpm",
             fs=self.fs,
         )
+
+
+# Alias retrocompatibilidad
+HR_Gen_Signal = HRAuroraSignal
 
 
 class SignalGroup:
